@@ -16,6 +16,11 @@
 - [x] Design polish — better contrast, spacing, sizing, consistent tokens
 - [x] Server-side session — auto-login, auto-refresh, no login page
 - [x] Cluster-based week grid — only overlapping events share column width
+- [x] Saturday column — auto-shown when Saturday events exist
+- [x] Even/odd week grids — biweekly courses shown in separate KW grids
+- [x] Conflict marking — dashed red outline + ⚠ badge on overlapping events
+- [x] Rich hover tooltips — lecturer, rhythm, event count, week numbers
+- [x] Expandable course cards — click ▾ to see individual event dates
 
 ## Next
 - [ ] Test ICS import in Google Calendar / Apple Calendar
@@ -23,7 +28,6 @@
 
 ## Further Considerations
 - [ ] Remember last-used study groups in localStorage
-- [ ] Conflict detection — highlight overlapping time slots in red
 - [ ] Course search within loaded groups (not just group search)
 - [ ] Mobile: responsive card layout, touch-friendly chip sizes
 - [ ] Persist course selection in localStorage across sessions

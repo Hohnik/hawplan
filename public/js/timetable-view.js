@@ -14,6 +14,20 @@ function colorOf(s) {
 }
 const DAY = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 
+/** ISO week number */
+function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const y = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t - y) / 86400000 + 1) / 7);
+}
+
+/** Format DD.MM. */
+function fmtDate(s) {
+  const d = new Date(s);
+  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.`;
+}
+
 /**
  * <timetable-view>
  * Self-initializing: fetches course tree on mount, then lets user
@@ -23,19 +37,19 @@ export class TimetableView extends LitElement {
   static properties = {
     _courseTree:    { state: true },
     _initError:    { state: true },
-    _loading:      { state: true },   // 'init' | null
+    _loading:      { state: true },
     _query:        { state: true },
     _open:         { state: true },   // Set<string> — expanded accordion keys
     _loaded:       { state: true },   // Map<stgru, { label, courses[] }>
     _loadingStgru: { state: true },
     _selected:     { state: true },   // Set<courseId>
+    _expanded:     { state: true },   // Set<courseId> — expanded course cards
     _error:        { state: true },
     _downloading:  { state: true },
     _done:         { state: true },
   };
 
   static styles = [shared, css`
-    /* ── Init state ───────────────────── */
     .center {
       display: flex; flex-direction: column; align-items: center;
       gap: 0.75rem; padding: 2rem 0;
@@ -60,11 +74,9 @@ export class TimetableView extends LitElement {
     }
     .row-fac:hover, .row-deg:hover, .row-prog:hover { background: var(--surface-2); }
     .tree > :last-child { border-bottom: none; }
-
     .row-fac  { padding: 0.5rem 0.75rem; font-size: 0.86rem; font-weight: 600; }
     .row-deg  { padding: 0.4rem 0.75rem 0.4rem 1.5rem; font-size: 0.8rem; color: var(--muted); font-weight: 600; }
     .row-prog { padding: 0.35rem 0.75rem 0.35rem 2.25rem; font-size: 0.8rem; }
-
     .arrow { color: var(--muted); font-size: 0.55em; width: 0.8em; flex-shrink: 0; }
     .prog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .count { font-size: 0.72rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
@@ -117,7 +129,7 @@ export class TimetableView extends LitElement {
       padding: 0.55rem 0.75rem;
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       cursor: pointer; transition: border-color 0.12s;
-      user-select: none;
+      user-select: none; flex-wrap: wrap;
     }
     .course:hover { border-color: var(--border-2); }
     .course.on { border-color: var(--accent); background: var(--accent-bg); }
@@ -125,7 +137,6 @@ export class TimetableView extends LitElement {
       margin-top: 3px; accent-color: var(--accent);
       pointer-events: none; width: auto; flex-shrink: 0;
     }
-
     .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
 
     .c-name {
@@ -142,15 +153,41 @@ export class TimetableView extends LitElement {
       font-size: 0.76rem; color: var(--muted);
       margin-top: 2px; line-height: 1.5;
     }
+    .c-biweekly {
+      font-size: 0.65rem; font-weight: 600;
+      padding: 0.05rem 0.35rem; border-radius: 4px;
+      background: rgba(251,191,36,0.12); color: #fbbf24;
+      white-space: nowrap;
+    }
     .c-count {
       margin-left: auto; font-size: 0.72rem; color: var(--muted);
       white-space: nowrap; flex-shrink: 0; padding-top: 3px;
     }
 
+    /* ── Expanded event list ──────────── */
+    .ev-list {
+      width: 100%; margin-top: 0.35rem;
+      padding-top: 0.35rem; border-top: 1px solid var(--border);
+    }
+    .ev-slot-hdr {
+      font-size: 0.72rem; font-weight: 600; color: var(--muted);
+      margin-top: 0.3rem; margin-bottom: 0.15rem;
+    }
+    .ev-dates {
+      font-size: 0.72rem; color: var(--muted); line-height: 1.7;
+      display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem;
+    }
+
+    /* ── Grids section ─────────────────── */
+    .grids { display: flex; flex-direction: column; gap: 0.75rem; }
+    .grid-label {
+      font-size: 0.78rem; font-weight: 600; color: var(--muted);
+      display: flex; align-items: center; gap: 0.4rem;
+    }
+
     /* ── Footer / Done ─────────────────── */
     .foot { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
     .stats { font-size: 0.82rem; color: var(--muted); flex: 1; }
-
     .done {
       text-align: center; padding: 1.5rem 0;
       display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
@@ -168,15 +205,13 @@ export class TimetableView extends LitElement {
     this._loaded = new Map();
     this._loadingStgru = null;
     this._selected = new Set();
+    this._expanded = new Set();
     this._error = '';
     this._downloading = false;
     this._done = false;
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    this._init();
-  }
+  connectedCallback() { super.connectedCallback(); this._init(); }
 
   /* ═══ Init ═══════════════════════════════════════ */
 
@@ -188,9 +223,7 @@ export class TimetableView extends LitElement {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
       this._courseTree = data.course_tree || [];
-    } catch (e) {
-      this._initError = e.message;
-    }
+    } catch (e) { this._initError = e.message; }
     this._loading = null;
   }
 
@@ -231,8 +264,10 @@ export class TimetableView extends LitElement {
     this._loaded = loaded;
     if (group) {
       const sel = new Set(this._selected);
-      for (const c of group.courses) sel.delete(c.id);
+      const exp = new Set(this._expanded);
+      for (const c of group.courses) { sel.delete(c.id); exp.delete(c.id); }
       this._selected = sel;
+      this._expanded = exp;
     }
   }
 
@@ -254,11 +289,20 @@ export class TimetableView extends LitElement {
       c.events.push(ev);
       try {
         const d = new Date(ev.dtstart);
-        const day = d.getDay(), start = ev.dtstart.slice(11, 16);
+        const day = d.getDay(), wk = isoWeek(d);
+        const start = ev.dtstart.slice(11, 16);
         const end = (ev.dtend || ev.dtstart).slice(11, 16);
         const sk = `${day}-${start}-${end}`;
-        if (!c.slots.some(s => s.key === sk))
-          c.slots.push({ key: sk, day, start, end, room: ev.location || '' });
+        let slot = c.slots.find(s => s.key === sk);
+        if (!slot) {
+          slot = {
+            key: sk, day, start, end,
+            room: ev.location || '', rhythmus: ev.rhythmus || '7',
+            weeks: new Set(),
+          };
+          c.slots.push(slot);
+        }
+        slot.weeks.add(wk);
       } catch {}
       if (ev.location) c.rooms.add(ev.location);
       const lec = ev.description?.match(/Dozent:\s*(.+)/);
@@ -276,6 +320,13 @@ export class TimetableView extends LitElement {
     this._selected = s;
   }
 
+  _toggleExpand(id, e) {
+    e.stopPropagation();
+    const s = new Set(this._expanded);
+    s.has(id) ? s.delete(id) : s.add(id);
+    this._expanded = s;
+  }
+
   _selectGroup(stgru, on) {
     const g = this._loaded.get(stgru);
     if (!g) return;
@@ -290,14 +341,36 @@ export class TimetableView extends LitElement {
   get _selectedCourses() { return this._allCourses.filter(c => this._selected.has(c.id)); }
   get _totalEvents() { return this._selectedCourses.reduce((n, c) => n + c.events.length, 0); }
 
-  get _previewSlots() {
+  _buildSlots(parity) {
     return this._selectedCourses.flatMap(c => {
       const color = colorOf(c.id);
-      return c.slots.map(s => ({
-        day: s.day, start: s.start, end: s.end,
-        label: c.fullName || c.summary,
-        room: s.room, color,
-      }));
+      return c.slots
+        .filter(s => {
+          if (!parity) return true;
+          const wks = [...s.weeks];
+          return parity === 'even'
+            ? wks.some(w => w % 2 === 0)
+            : wks.some(w => w % 2 !== 0);
+        })
+        .map(s => ({
+          day: s.day, start: s.start, end: s.end,
+          label: c.fullName || c.summary,
+          tag: c.fullName && c.summary !== c.fullName ? c.summary : '',
+          room: s.room, color, lecturer: c.lecturer,
+          eventCount: c.events.length,
+          rhythmus: s.rhythmus, weeks: s.weeks,
+        }));
+    });
+  }
+
+  get _hasBiweekly() {
+    const all = this._buildSlots(null);
+    return all.some(s => {
+      const wks = [...(s.weeks || [])];
+      if (wks.length < 2) return wks.length === 1; // single event = show in one grid
+      const hasEven = wks.some(w => w % 2 === 0);
+      const hasOdd  = wks.some(w => w % 2 !== 0);
+      return !(hasEven && hasOdd);
     });
   }
 
@@ -332,14 +405,12 @@ export class TimetableView extends LitElement {
         <p class="hint">Verbinde mit Primuss…</p>
       </div>`;
     }
-
     if (this._initError) {
       return html`<div class="stack">
         <p class="error-msg">❌ ${this._initError}</p>
         <button class="btn-primary" @click=${this._init}>Erneut versuchen</button>
       </div>`;
     }
-
     if (this._done) {
       return html`<div class="stack">
         <div class="done">
@@ -350,14 +421,31 @@ export class TimetableView extends LitElement {
       </div>`;
     }
 
+    const allSlots = this._buildSlots(null);
+    const biweekly = this._hasBiweekly;
+
     return html`<div class="stack">
       <h2>Stundenplan</h2>
       ${this._renderPicker()}
       ${this._loaded.size > 0 ? this._renderCourses() : ''}
-      ${this._previewSlots.length > 0 ? html`
-        <week-grid .slots=${this._previewSlots}></week-grid>` : ''}
+      ${allSlots.length > 0 ? (biweekly
+        ? this._renderBiweeklyGrids()
+        : html`<week-grid .slots=${allSlots}></week-grid>`) : ''}
       ${this._error ? html`<p class="error-msg">❌ ${this._error}</p>` : ''}
       ${this._loaded.size > 0 ? this._renderFooter() : ''}
+    </div>`;
+  }
+
+  _renderBiweeklyGrids() {
+    return html`<div class="grids">
+      <div>
+        <div class="grid-label">📅 Ungerade KW</div>
+        <week-grid .slots=${this._buildSlots('odd')}></week-grid>
+      </div>
+      <div>
+        <div class="grid-label">📅 Gerade KW</div>
+        <week-grid .slots=${this._buildSlots('even')}></week-grid>
+      </div>
     </div>`;
   }
 
@@ -392,11 +480,9 @@ export class TimetableView extends LitElement {
           || fac.label.toLowerCase().includes(q))
       : allGroups;
     if (!matches.length) return '';
-
     const key = `fac::${fac.label}`;
     const open = q || this._open.has(key);
     const loadedN = allGroups.filter(g => loadedKeys.has(g.stgru)).length;
-
     return html`
       <div class="row-fac" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
@@ -414,10 +500,8 @@ export class TimetableView extends LitElement {
           || fac.label.toLowerCase().includes(q))
       : allGroups;
     if (!matches.length) return '';
-
     const key = `deg::${fac.label}::${deg.label}`;
     const open = q || this._open.has(key);
-
     return html`
       <div class="row-deg" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
@@ -434,10 +518,8 @@ export class TimetableView extends LitElement {
           || fac.label.toLowerCase().includes(q))
       : prog.groups;
     if (!groups.length) return '';
-
     const key = `prog::${fac.label}::${prog.code}`;
     const open = q || this._open.has(key);
-
     return html`
       <div class="row-prog" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
@@ -468,28 +550,70 @@ export class TimetableView extends LitElement {
             <button class="btn-chip" @click=${() => this._selectGroup(stgru, true)}>Alle</button>
             <button class="btn-chip" @click=${() => this._selectGroup(stgru, false)}>Keine</button>
           </div>
-          ${group.courses.map(c => {
-            const on = this._selected.has(c.id);
-            const color = colorOf(c.id);
-            const name = c.fullName || c.summary;
-            const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
-            const slots = c.slots.map(s =>
-              `${DAY[s.day]} ${s.start}–${s.end}`).join(', ');
-            return html`
-              <div class="course ${on ? 'on' : ''}" @click=${() => this._toggle(c.id)}>
-                <input type="checkbox" .checked=${on} />
-                <span class="dot" style="background:${color}"></span>
-                <div style="flex:1;min-width:0">
-                  <div class="c-name">
-                    ${name}${tag ? html` <span class="c-tag">${tag}</span>` : ''}
-                  </div>
-                  <div class="c-meta">
-                    ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
-                  </div>
-                </div>
-                <span class="c-count">${c.events.length}×</span>
-              </div>`;
-          })}
+          ${group.courses.map(c => this._renderCourse(c))}
+        `)}
+      </div>`;
+  }
+
+  _renderCourse(c) {
+    const on = this._selected.has(c.id);
+    const exp = this._expanded.has(c.id);
+    const color = colorOf(c.id);
+    const name = c.fullName || c.summary;
+    const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
+    const hasBi = c.slots.some(s => s.rhythmus === '14');
+    const slots = c.slots.map(s => {
+      let t = `${DAY[s.day]} ${s.start}–${s.end}`;
+      if (s.rhythmus === '14') t += ' ⟳';
+      return t;
+    }).join(', ');
+
+    return html`
+      <div class="course ${on ? 'on' : ''}" @click=${() => this._toggle(c.id)}>
+        <input type="checkbox" .checked=${on} />
+        <span class="dot" style="background:${color}"></span>
+        <div style="flex:1;min-width:0">
+          <div class="c-name">
+            ${name}${tag ? html` <span class="c-tag">${tag}</span>` : ''}
+            ${hasBi ? html` <span class="c-biweekly">14-tägig</span>` : ''}
+          </div>
+          <div class="c-meta">
+            ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
+            <span style="cursor:pointer;margin-left:0.3rem;opacity:0.6"
+                  @click=${e => this._toggleExpand(c.id, e)}
+                  title="Einzeltermine ${exp ? 'ausblenden' : 'anzeigen'}">
+              ${exp ? '▴' : '▾'} ${c.events.length}×
+            </span>
+          </div>
+          ${exp ? this._renderEventList(c) : ''}
+        </div>
+      </div>`;
+  }
+
+  _renderEventList(c) {
+    // Group events by slot (day+time)
+    const bySlot = new Map();
+    for (const ev of c.events) {
+      try {
+        const d = new Date(ev.dtstart);
+        const day = d.getDay();
+        const start = ev.dtstart.slice(11, 16);
+        const end = (ev.dtend || ev.dtstart).slice(11, 16);
+        const sk = `${DAY[day]} ${start}–${end}`;
+        if (!bySlot.has(sk)) bySlot.set(sk, []);
+        bySlot.get(sk).push(ev);
+      } catch {}
+    }
+    return html`
+      <div class="ev-list">
+        ${[...bySlot].map(([sk, evs]) => html`
+          <div class="ev-slot-hdr">
+            ${sk}${evs[0]?.location ? ` · 📍 ${evs[0].location}` : ''}
+          </div>
+          <div class="ev-dates">
+            ${evs.sort((a, b) => a.dtstart.localeCompare(b.dtstart))
+                 .map(ev => html`<span>${fmtDate(ev.dtstart)}</span>`)}
+          </div>
         `)}
       </div>`;
   }

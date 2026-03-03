@@ -1,11 +1,12 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 
-const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
+const ALL_DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 const START = 8, END = 20, HOURS = END - START, QROWS = HOURS * 4;
 
 /**
  * <week-grid .slots=${[...]}></week-grid>
- * Each slot: { day: 1–5, start, end, label, title?, color, room }
+ * Each slot: { day: 1–6, start, end, label, tag?, color, room,
+ *              lecturer?, eventCount?, rhythmus?, weeks?: Set<number> }
  */
 export class WeekGrid extends LitElement {
   static properties = { slots: { type: Array } };
@@ -15,7 +16,6 @@ export class WeekGrid extends LitElement {
 
     .grid {
       display: grid;
-      grid-template-columns: 36px repeat(5, 1fr);
       grid-template-rows: 24px repeat(${QROWS}, 11px);
       font-size: 0.72rem;
       border-radius: var(--radius-sm, 7px);
@@ -64,6 +64,10 @@ export class WeekGrid extends LitElement {
       cursor: default;
       box-sizing: border-box;
     }
+    .ev.conflict {
+      outline: 1.5px dashed rgba(248,113,113,0.7);
+      outline-offset: -1.5px;
+    }
     .ev-label {
       font-weight: 600;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -71,6 +75,10 @@ export class WeekGrid extends LitElement {
     .ev-room {
       opacity: 0.7; font-size: 0.58rem;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .conflict-badge {
+      position: absolute; top: 1px; right: 3px;
+      font-size: 0.55rem; line-height: 1; opacity: 0.8;
     }
 
     .empty-msg {
@@ -90,7 +98,6 @@ export class WeekGrid extends LitElement {
       ...s, startMin: this._toMin(s.start), endMin: this._toMin(s.end),
     })).sort((a, b) => a.startMin - b.startMin || (b.endMin - b.startMin) - (a.endMin - a.startMin));
 
-    // Split into clusters of overlapping events
     const clusters = [];
     let cur = [items[0]], curEnd = items[0].endMin;
     for (let i = 1; i < items.length; i++) {
@@ -105,7 +112,6 @@ export class WeekGrid extends LitElement {
     }
     clusters.push(cur);
 
-    // Layout each cluster independently — only overlapping events share columns
     const result = [];
     for (const group of clusters) {
       const cols = [];
@@ -117,14 +123,37 @@ export class WeekGrid extends LitElement {
         assigned.push(col);
       }
       const total = cols.length;
+      const conflict = total > 1;
       for (let i = 0; i < group.length; i++)
-        result.push({ ...group[i], left: assigned[i] / total, width: 1 / total });
+        result.push({ ...group[i], left: assigned[i] / total, width: 1 / total, conflict });
     }
     return result;
   }
 
+  _tooltip(s) {
+    const lines = [s.label];
+    if (s.tag) lines[0] += ` (${s.tag})`;
+    lines.push(`${s.start}–${s.end}`);
+    if (s.room) lines.push(`📍 ${s.room}`);
+    if (s.lecturer) lines.push(`👤 ${s.lecturer}`);
+    const r = s.rhythmus;
+    const n = s.eventCount || '';
+    if (r === '14') lines.push(`🔁 Alle 2 Wochen${n ? ` · ${n} Termine` : ''}`);
+    else if (n) lines.push(`🔁 Wöchentlich · ${n} Termine`);
+    if (s.weeks?.size && r === '14') {
+      const wks = [...s.weeks].sort((a, b) => a - b);
+      lines.push(`KW ${wks.join(', ')}`);
+    }
+    return lines.join('\n');
+  }
+
   render() {
-    const slots = (this.slots || []).filter(s => s.day >= 1 && s.day <= 5);
+    const hasSat = (this.slots || []).some(s => s.day === 6);
+    const dayCount = hasSat ? 6 : 5;
+    const days = ALL_DAYS.slice(0, dayCount);
+    const dayNums = Array.from({ length: dayCount }, (_, i) => i + 1);
+
+    const slots = (this.slots || []).filter(s => s.day >= 1 && s.day <= dayCount);
     const hours = Array.from({ length: HOURS }, (_, i) => START + i);
     const totalH = QROWS * 11;
 
@@ -136,9 +165,10 @@ export class WeekGrid extends LitElement {
     const laid = new Map();
     for (const [day, ds] of byDay) laid.set(day, this._layoutDay(ds));
 
-    return html`<div class="grid">
+    return html`<div class="grid"
+      style="grid-template-columns: 36px repeat(${dayCount}, 1fr)">
       <div class="corner"></div>
-      ${DAYS.map((d, i) => html`<div class="day-hdr" style="grid-column:${i + 2}">${d}</div>`)}
+      ${days.map((d, i) => html`<div class="day-hdr" style="grid-column:${i + 2}">${d}</div>`)}
 
       ${hours.map(h => {
         const row = (h - START) * 4 + 2;
@@ -149,16 +179,17 @@ export class WeekGrid extends LitElement {
 
       ${!slots.length ? html`<div class="empty-msg">Kurse auswählen…</div>` : ''}
 
-      ${[1, 2, 3, 4, 5].map(day => html`
+      ${dayNums.map(day => html`
         <div class="day-col" style="grid-column:${day + 1}">
           ${(laid.get(day) || []).map(s => {
             const top = (s.startMin / (HOURS * 60)) * totalH;
             const h = ((s.endMin - s.startMin) / (HOURS * 60)) * totalH;
             return html`
-              <div class="ev"
+              <div class="ev ${s.conflict ? 'conflict' : ''}"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
                           background:${s.color}18;border-left:3px solid ${s.color};color:${s.color}"
-                   title="${s.label}\n${s.start}–${s.end}${s.room ? '\n📍 ' + s.room : ''}">
+                   title=${this._tooltip(s)}>
+                ${s.conflict ? html`<span class="conflict-badge">⚠</span>` : ''}
                 <span class="ev-label">${s.label}</span>
                 ${h > 38 && s.room ? html`<span class="ev-room">${s.room}</span>` : ''}
               </div>`;

@@ -1,5 +1,19 @@
 # Logbook
 
+## 2026-03-03 — Saturday, biweekly grids, conflicts, event details
+
+**Saturday column:** `week-grid` auto-detects `day === 6` in slots and switches between 5 and 6 columns. Grid template set dynamically via inline `style` on `.grid`. No extra prop needed — grid adapts to its data.
+
+**Biweekly even/odd grids:** Slots now track actual ISO week numbers (`weeks: Set<number>`) instead of just deduplicating by day+time. `_buildSlots(parity)` filters slots: `'even'` includes slots with any even-week occurrence, `'odd'` for odd. `_hasBiweekly` computed getter checks if any slot is *only* even or *only* odd — if so, renders two `<week-grid>` components labeled "Ungerade KW" / "Gerade KW". Weekly courses appear in both grids. Data analysis confirmed: some r=14 courses are MIXED parity (e.g. Prakt. AlgoDat has events in nearly every week despite r=14) — the per-slot week-set approach handles this correctly.
+
+**Conflict marking:** `_layoutDay` now tags items with `conflict: true` when their cluster has >1 column. Grid renders `.ev.conflict` with dashed red outline + ⚠ badge in top-right corner. Course's own color preserved on left border for identification.
+
+**Rich hover tooltips:** `_tooltip(s)` builds multi-line title with: course name (+ tag), time, room, lecturer, rhythm ("Alle 2 Wochen" / "Wöchentlich"), event count, and KW list for biweekly slots. Extra data passed through slot object: `lecturer`, `eventCount`, `rhythmus`, `weeks`, `tag`.
+
+**Expandable course cards:** New `_expanded: Set<courseId>` state. Click ▾ on event count to toggle. Expanded view groups events by slot (day+time), shows sorted dates as `DD.MM.` chips. `stopPropagation` prevents toggling the checkbox when expanding. Cards also show `14-tägig` badge and ⟳ suffix on biweekly slot descriptions.
+
+**Line counts:** week-grid 171→202 (+31), timetable-view 512→636 (+124). Total 1372→1450.
+
 ## 2026-03-03 — Remove login page, server-side session
 
 **Removed:** `login-view.js`, `app-shell.js`, `/api/login`, `/api/login/mfa`, `/api/status`, `/api/session`, `LoginRequest`, `MfaRequest`, MFA mid-flow store (`_mfa_store`, `_save_mfa`, `_pop_mfa`), `shibboleth_mfa()`, per-user session cache.
