@@ -86,7 +86,15 @@ class FormExtractor(HTMLParser):
         elif tag == "input" and self._cur is not None:
             name  = a.get("name")
             itype = a.get("type", "text").lower()
-            if name and itype != "submit" and itype != "button":
+            # Include all inputs except anonymous submit/button/image/reset
+            if name and itype not in ("submit", "button", "image", "reset"):
+                self._cur["fields"][name] = a.get("value", "")
+        elif tag == "button" and self._cur is not None:
+            # Named submit buttons (e.g. <button type="submit" name="_eventId_proceed">)
+            # must be included — Shibboleth IdP uses the event ID to route the action.
+            name  = a.get("name")
+            btype = a.get("type", "submit").lower()
+            if name and btype == "submit":
                 self._cur["fields"][name] = a.get("value", "")
         elif tag == "select" and self._cur is not None:
             name = a.get("name")
@@ -94,8 +102,6 @@ class FormExtractor(HTMLParser):
                 self._cur["fields"][name] = ""   # filled by <option selected>
         elif tag == "option" and self._cur is not None:
             if "selected" in dict(attrs):
-                # find most recently added select field and set its value
-                # (simplistic but sufficient for SAML forms)
                 pass
 
     def handle_endtag(self, tag: str):
@@ -175,12 +181,22 @@ _TOKEN_KEYS    = {
     "j_tokennumber", "tokennumber", "token",
     "otp", "totp", "mfa", "passcode", "code", "pin",
     "_shib_idp_mfa_otp", "authn_code", "response",
+    "fudis_otp_input",   # HS Landshut Fudis MFA framework
 }
 # Fields we know are never the token
 _BORING_FIELDS = {
-    "csrf_token", "_eventid_proceed", "shib_idp_ls_supported",
+    "csrf_token", "shib_idp_ls_supported",
     "execution", "samlrequest", "relaystate",
 }
+
+def _is_boring(k: str) -> bool:
+    """True for fields that carry no user-visible data (CSRF, hidden infra, event IDs)."""
+    kl = k.lower()
+    return (
+        kl in _BORING_FIELDS
+        or kl.startswith("shib_idp_ls_")
+        or kl.startswith("_eventid_")   # _eventId_proceed, _eventId_FudisCrRestart, …
+    )
 
 
 def _find_field(fields: dict, key_set: set[str]) -> str | None:
@@ -192,41 +208,29 @@ def _is_login_form(fields: dict) -> bool:
 
 def _is_mfa_form(fields: dict) -> bool:
     """
-    An MFA form is any form that is NOT a full login form but still has
-    some interactive input for the user:
-      • known token field name (j_tokenNumber, otp, …)
-      • a lone 'password'-named field with NO username sibling
-        (some IDPs name the OTP input 'password')
-      • any other non-boring, non-shib-internal field
+    An MFA / TOTP form: not a full login form, but has at least one
+    field that carries user-entered data (the token).
     """
     if _is_login_form(fields):
         return False
     if _find_field(fields, _TOKEN_KEYS):
         return True
     if _find_field(fields, _PASSWORD_KEYS) and not _find_field(fields, _USERNAME_KEYS):
-        return True   # lone 'password' = OTP input
-    interesting = [
-        k for k in fields
-        if k.lower() not in _BORING_FIELDS
-        and not k.lower().startswith("shib_idp_ls_")
-    ]
-    return bool(interesting)
+        return True   # lone 'password' field = OTP input in some IDPs
+    return any(not _is_boring(k) for k in fields)
 
 def _guess_token_field(fields: dict) -> str | None:
-    """Return the most likely token input field name."""
+    """Return the name of the token input field."""
     # 1. Known token field name
     known = _find_field(fields, _TOKEN_KEYS)
     if known:
         return known
-    # 2. Lone 'password'-named field (no username sibling)
+    # 2. Lone 'password'-named field without a username sibling
     pw = _find_field(fields, _PASSWORD_KEYS)
     if pw and not _find_field(fields, _USERNAME_KEYS):
         return pw
-    # 3. First non-boring field
-    for k in fields:
-        if k.lower() not in _BORING_FIELDS and not k.lower().startswith("shib_idp_ls_"):
-            return k
-    return None
+    # 3. First field that isn't infra/boring
+    return next((k for k in fields if not _is_boring(k)), None)
 
 
 async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
@@ -361,7 +365,13 @@ async def shibboleth_phase2(state_id: str, totp: str) -> dict:
         follow_redirects=True, timeout=30.0, headers=BROWSER_HEADERS,
         cookies=state["cookies"],
     ) as client:
-        fields = dict(state["fields"])
+        # Keep all hidden fields + _eventId_proceed (the "confirm" action).
+        # Strip other _eventId_* buttons (e.g. _eventId_FudisCrRestart = "cancel")
+        # so the IdP doesn't get confused about which action to take.
+        fields = {
+            k: v for k, v in state["fields"].items()
+            if not k.lower().startswith("_eventid_") or k.lower() == "_eventid_proceed"
+        }
         fields[state["token_field"]] = totp.strip()
 
         r = await client.post(
