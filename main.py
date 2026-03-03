@@ -4,18 +4,16 @@ Exports HS Landshut Primuss timetables as .ics calendar files.
 
 Sections:
   1. Config & constants
-  2. Pydantic models
-  3. HTML form parser
-  4. Cookie helpers
-  5. Session cache
-  6. Shibboleth auth (login, MFA, SAML)
-  7. Primuss helpers (semester, events, course groups)
-  8. ICS generation
-  9. FastAPI app & routes
+  2. HTML form parser
+  3. Server-side session (auto-login, auto-refresh)
+  4. Shibboleth auth (credentials + TOTP, fully automatic)
+  5. Primuss helpers (semester, events, course groups)
+  6. ICS generation
+  7. FastAPI app & routes
 """
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from html.parser import HTMLParser
@@ -24,7 +22,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone, date
 from io import BytesIO
 from icalendar import Calendar, Event as IcsEvent, vText
-import httpx, asyncio, uuid, os, re, pyotp
+import httpx, asyncio, os, re, pyotp
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -33,51 +31,29 @@ import httpx, asyncio, uuid, os, re, pyotp
 
 load_dotenv()
 
-ENV_USERNAME    = os.getenv("USERNAME", "")
-ENV_PASSWORD    = os.getenv("PASSWORD", "")
-ENV_TOTP_SECRET = os.getenv("TOTP_SECRET", "")
+_USERNAME    = os.getenv("USERNAME", "")
+_PASSWORD    = os.getenv("PASSWORD", "")
+_TOTP_SECRET = os.getenv("TOTP_SECRET", "")
 
 PRIMUSS_URL = "https://www3.primuss.de/stpl/index.php"
 FH          = "fhla"
 LANG        = "de"
 SEM         = "9"
 
-HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+_HEADERS = {
+    "User-Agent": _UA, "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. Pydantic models
-# ═══════════════════════════════════════════════════════════════════
-
-class LoginRequest(BaseModel):
-    username: str = ""
-    password: str = ""
-
-class MfaRequest(BaseModel):
-    state_id: str
-    totp: str
-
-class TimetableRequest(BaseModel):
-    cookies: str
-    session: str
-    user:    str
-    stgru:   str
-
-class IcsRequest(BaseModel):
-    events: list[dict]
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. HTML form parser
+# 2. HTML form parser
 # ═══════════════════════════════════════════════════════════════════
 
 class FormParser(HTMLParser):
-    """Extract all <form> elements with their fields from HTML."""
+    """Extract <form> elements with their fields from HTML."""
 
     def __init__(self):
         super().__init__()
@@ -112,52 +88,42 @@ class FormParser(HTMLParser):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. Cookie helpers
+# 3. Server-side session
 # ═══════════════════════════════════════════════════════════════════
 
-def parse_cookies(raw: str) -> dict[str, str]:
-    raw = re.sub(r"[\r\n]+\s*", "", raw).strip()
+SESSION_TTL = timedelta(minutes=30)
+_session: dict | None = None    # {cookies, session, user, course_tree, _ts}
+_auth_lock = asyncio.Lock()
+
+
+def _parse_cookies(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}
-    for part in raw.split(";"):
+    for part in re.sub(r"[\r\n]+\s*", "", raw).strip().split(";"):
         if "=" in part:
             k, v = part.split("=", 1)
             out[k.strip()] = v.strip()
     return out
 
-def cookies_to_str(jar: httpx.Cookies) -> str:
-    return "; ".join(f"{k}={v}" for k, v in jar.items())
+
+async def _ensure_session(force: bool = False) -> dict:
+    """Return valid Primuss session, auto-authenticating if needed."""
+    global _session
+    if not force and _session and (datetime.now() - _session["_ts"]) < SESSION_TTL:
+        return _session
+    async with _auth_lock:
+        # Double-check after acquiring lock
+        if not force and _session and (datetime.now() - _session["_ts"]) < SESSION_TTL:
+            return _session
+        if not (_USERNAME and _PASSWORD and _TOTP_SECRET):
+            raise HTTPException(500,
+                ".env mit USERNAME, PASSWORD und TOTP_SECRET anlegen.")
+        result = await _shibboleth_login(_USERNAME, _PASSWORD)
+        _session = {**result, "_ts": datetime.now()}
+        return _session
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 5. Session cache
-# ═══════════════════════════════════════════════════════════════════
-
-SESSION_TTL = timedelta(minutes=30)
-_session_cache: dict[str, dict] = {}
-
-def cache_session(data: dict):
-    """Store a successful login result."""
-    user = data.get("user", "")
-    if user:
-        _session_cache[user] = {**data, "_ts": datetime.now()}
-
-def get_cached_session() -> dict | None:
-    """Return the most recent valid session, or None."""
-    now = datetime.now()
-    for user in list(_session_cache):
-        entry = _session_cache[user]
-        if now - entry["_ts"] > SESSION_TTL:
-            del _session_cache[user]
-            continue
-        return {k: v for k, v in entry.items() if k != "_ts"}
-    return None
-
-def invalidate_session(user: str):
-    _session_cache.pop(user, None)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 6. Shibboleth auth
+# 4. Shibboleth auth
 # ═══════════════════════════════════════════════════════════════════
 
 _USER_FIELDS  = {"j_username", "username", "user", "uid", "login"}
@@ -166,50 +132,33 @@ _TOKEN_FIELDS = {
     "j_tokennumber", "tokennumber", "token", "otp", "totp", "mfa",
     "passcode", "code", "pin", "fudis_otp_input",
 }
-_BORING_FIELDS = {"csrf_token", "shib_idp_ls_supported", "execution", "samlrequest", "relaystate"}
+_BORING = {"csrf_token", "shib_idp_ls_supported", "execution",
+           "samlrequest", "relaystate"}
+
 
 def _find(fields: dict, keys: set) -> str | None:
     return next((k for k in fields if k.lower() in keys), None)
 
 def _is_boring(k: str) -> bool:
     kl = k.lower()
-    return kl in _BORING_FIELDS or kl.startswith("shib_idp_ls_") or kl.startswith("_eventid_")
+    return kl in _BORING or kl.startswith("shib_idp_ls_") or kl.startswith("_eventid_")
 
-def _is_login_form(fields: dict) -> bool:
-    return bool(_find(fields, _USER_FIELDS) and _find(fields, _PASS_FIELDS))
+def _is_login_form(f: dict) -> bool:
+    return bool(_find(f, _USER_FIELDS) and _find(f, _PASS_FIELDS))
 
-def _is_mfa_form(fields: dict) -> bool:
-    if _is_login_form(fields):
+def _is_mfa_form(f: dict) -> bool:
+    if _is_login_form(f):
         return False
-    if _find(fields, _TOKEN_FIELDS):
+    if _find(f, _TOKEN_FIELDS):
         return True
-    if _find(fields, _PASS_FIELDS) and not _find(fields, _USER_FIELDS):
+    if _find(f, _PASS_FIELDS) and not _find(f, _USER_FIELDS):
         return True
-    return any(not _is_boring(k) for k in fields)
+    return any(not _is_boring(k) for k in f)
 
-def _guess_token(fields: dict) -> str | None:
-    return (_find(fields, _TOKEN_FIELDS)
-            or (_find(fields, _PASS_FIELDS) if not _find(fields, _USER_FIELDS) else None)
-            or next((k for k in fields if not _is_boring(k)), None))
-
-# MFA mid-flow store
-_mfa_store: dict[str, dict] = {}
-
-def _save_mfa(cookies, action, fields, token_field) -> str:
-    cutoff = datetime.now() - timedelta(minutes=5)
-    for k in [k for k, v in _mfa_store.items() if v["ts"] < cutoff]:
-        del _mfa_store[k]
-    sid = str(uuid.uuid4())
-    _mfa_store[sid] = {"cookies": cookies, "action": action,
-                       "fields": fields, "token_field": token_field,
-                       "ts": datetime.now()}
-    return sid
-
-def _pop_mfa(state_id: str) -> dict:
-    state = _mfa_store.pop(state_id, None)
-    if not state:
-        raise HTTPException(400, "MFA-Session abgelaufen. Bitte neu einloggen.")
-    return state
+def _guess_token(f: dict) -> str | None:
+    return (_find(f, _TOKEN_FIELDS)
+            or (_find(f, _PASS_FIELDS) if not _find(f, _USER_FIELDS) else None)
+            or next((k for k in f if not _is_boring(k)), None))
 
 def _only_proceed(fields: dict) -> dict:
     return {k: v for k, v in fields.items()
@@ -217,7 +166,7 @@ def _only_proceed(fields: dict) -> dict:
 
 
 async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
-    """Submit SAMLResponse → Primuss ACS, extract session + course groups."""
+    """Submit SAMLResponse → Primuss, extract session + course tree."""
     forms     = FormParser.parse(r.text)
     saml_form = next((f for f in forms if "SAMLResponse" in f["fields"]), None)
     if not saml_form:
@@ -228,27 +177,27 @@ async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
         acs = urljoin(str(r.url), acs)
 
     final = await client.post(acs, data=saml_form["fields"],
-                              headers={**HEADERS, "Referer": str(r.url),
+                              headers={**_HEADERS, "Referer": str(r.url),
                                        "Content-Type": "application/x-www-form-urlencoded"})
 
-    url        = str(final.url)
-    cookie_str = cookies_to_str(client.cookies)
+    cookie_str = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
     if not cookie_str:
         raise HTTPException(502, "Login OK, aber keine Cookies erhalten.")
 
-    session = (m.group(1) if (m := re.search(r"[?&]Session=([^&#]+)", url)) else "")
-    user    = (m.group(1) if (m := re.search(r"[?&]User=([^&#]+)",    url)) else "")
-    groups  = _parse_course_groups(final.text)
+    url  = str(final.url)
+    sesn = (m.group(1) if (m := re.search(r"[?&]Session=([^&#]+)", url)) else "")
+    user = (m.group(1) if (m := re.search(r"[?&]User=([^&#]+)",    url)) else "")
 
-    return {"cookies": cookie_str, "session": session, "user": user,
-            "course_tree": groups["tree"], "course_groups": groups["flat"]}
+    return {"cookies": cookie_str, "session": sesn, "user": user,
+            "course_tree": _parse_course_groups(final.text)["tree"]}
 
 
-async def shibboleth_login(username: str, password: str) -> dict:
-    """Full Shibboleth IdP walk: forms → credentials → MFA → SAML."""
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30, headers=HEADERS) as client:
-        r = await client.get(f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANG}")
-        creds_sent = False
+async def _shibboleth_login(username: str, password: str) -> dict:
+    """Full Shibboleth walk: forms → credentials → TOTP → SAML."""
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30,
+                                 headers=_HEADERS) as client:
+        r = await client.get(
+            f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANG}")
 
         for _ in range(8):
             forms = FormParser.parse(r.text)
@@ -259,64 +208,46 @@ async def shibboleth_login(username: str, password: str) -> dict:
             action = forms[0]["action"]
             if not action.startswith("http"):
                 action = urljoin(str(r.url), action)
+            ref = {**_HEADERS, "Referer": str(r.url),
+                   "Content-Type": "application/x-www-form-urlencoded"}
 
+            # SAML response → finish
             if "SAMLResponse" in fields:
                 return await _finish_saml(client, r)
 
-            if _find(fields, _PASS_FIELDS):
-                fields[_find(fields, _USER_FIELDS) or "j_username"] = username
-                fields[_find(fields, _PASS_FIELDS) or "j_password"] = password
-                creds_sent = True
-                r = await client.post(action, data=fields,
-                    headers={**HEADERS, "Referer": str(r.url),
-                             "Content-Type": "application/x-www-form-urlencoded"})
+            # Login form → inject credentials
+            if _is_login_form(fields):
+                fields[_find(fields, _USER_FIELDS)] = username
+                fields[_find(fields, _PASS_FIELDS)] = password
+                r = await client.post(action, data=fields, headers=ref)
                 nf = FormParser.parse(r.text)
                 if (not any("SAMLResponse" in f["fields"] for f in nf)
                         and any(_is_login_form(f["fields"]) for f in nf)):
                     raise HTTPException(401, "Benutzername oder Passwort falsch.")
                 continue
 
-            if creds_sent and _is_mfa_form(fields):
+            # MFA form → auto-submit TOTP
+            if _is_mfa_form(fields):
                 token_field = _guess_token(fields)
                 if not token_field:
                     raise HTTPException(502, "MFA-Feld nicht erkannt.")
-                if ENV_TOTP_SECRET:
-                    code = pyotp.TOTP(ENV_TOTP_SECRET, digits=6, interval=30).now()
-                    r = await client.post(action, data={**_only_proceed(fields), token_field: code},
-                        headers={**HEADERS, "Referer": str(r.url),
-                                 "Content-Type": "application/x-www-form-urlencoded"})
-                    continue
-                sid = _save_mfa(dict(client.cookies), action, fields, token_field)
-                return {"requires_mfa": True, "state_id": sid, "token_field": token_field}
+                code = pyotp.TOTP(_TOTP_SECRET, digits=6, interval=30).now()
+                r = await client.post(
+                    action, headers=ref,
+                    data={**_only_proceed(fields), token_field: code})
+                continue
 
-            r = await client.post(action, data=fields,
-                headers={**HEADERS, "Referer": str(r.url),
-                         "Content-Type": "application/x-www-form-urlencoded"})
+            # Unknown form → submit as-is
+            r = await client.post(action, data=fields, headers=ref)
 
         raise HTTPException(502, "Login-Flow nach 8 Schritten nicht abgeschlossen.")
 
 
-async def shibboleth_mfa(state_id: str, totp: str) -> dict:
-    state = _pop_mfa(state_id)
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30, headers=HEADERS,
-                                 cookies=state["cookies"]) as client:
-        fields = {**_only_proceed(state["fields"]), state["token_field"]: totp.strip()}
-        r = await client.post(state["action"], data=fields,
-            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"})
-
-        forms = FormParser.parse(r.text)
-        if not any("SAMLResponse" in f["fields"] for f in forms):
-            if any(_is_mfa_form(f["fields"]) for f in forms):
-                raise HTTPException(401, "MFA-Code falsch oder abgelaufen.")
-            raise HTTPException(502, "Unerwartete Antwort nach MFA-Eingabe.")
-        return await _finish_saml(client, r)
-
-
 # ═══════════════════════════════════════════════════════════════════
-# 7. Primuss helpers
+# 5. Primuss helpers
 # ═══════════════════════════════════════════════════════════════════
 
-def current_semester() -> tuple[date, date]:
+def _current_semester() -> tuple[date, date]:
     today = date.today()
     y = today.year
     if 3 <= today.month <= 7:
@@ -325,32 +256,30 @@ def current_semester() -> tuple[date, date]:
         return date(y, 10, 1), date(y + 1, 2, 15)
     return date(y - 1, 10, 1), date(y, 2, 15)
 
-def week_mondays(start: date, end: date):
+def _week_mondays(start: date, end: date):
     d = start - timedelta(days=start.weekday())
     while d <= end:
         yield d
         d += timedelta(weeks=1)
 
-def primuss_date(d: date) -> str:
+def _primuss_date(d: date) -> str:
     return f"{d.month}/{d.day}/{d.year}"
 
-def _parse_primuss_dt(s: str) -> str:
+def _parse_dt(s: str) -> str:
     m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})", s.strip())
     if not m:
         return ""
     mo, d, y, h, mi = m.groups()
     return f"{y}-{int(mo):02d}-{int(d):02d}T{int(h):02d}:{mi}:00"
 
+
 def _parse_course_groups(html: str) -> dict:
-    """Parse the Primuss tree: Faculty → Degree → Program → Semester groups.
+    """Parse Primuss tree: Faculty → Degree → Program → Semester groups.
 
-    Returns {"tree": [...], "flat": [...]} where tree has the full hierarchy
-    and flat is a convenience list of all leaf groups with ancestry.
-
-    Strategy: regex can't handle nested <ol> tags, so we locate all structural
-    elements by position and walk them in document order to reconstruct the tree.
+    Uses position-based parsing — locates structural elements by their offset
+    in the HTML and walks them in document order to reconstruct ancestry.
+    Avoids nested <ol> regex pitfalls.
     """
-    # 1. Locate structural elements by position
     fac_pos = {m.start(): m.group(1).strip()
                for m in re.finditer(r'<label\s+for="orga_\d+"[^>]*>([^<]+)</label>', html)}
 
@@ -369,83 +298,71 @@ def _parse_course_groups(html: str) -> dict:
     stg_labels = {m.group(1): m.group(2).strip()
                   for m in re.finditer(r'<label\s+for="stg_(\d+)"[^>]*>([^<]+)</label>', html)}
 
-    # 2. Walk document order to assign faculty + degree to each program
-    events = sorted(
+    # Walk document order to assign faculty + degree to each program
+    markers = sorted(
         [("fac", p, d) for p, d in fac_pos.items()] +
         [("deg", p, d) for p, d in deg_pos.items()] +
         [("stg", p, d) for p, d in stg_pos.items()],
         key=lambda x: x[1],
     )
-    programs: list[dict] = []  # [{fac, deg, stg_id, name, code}]
-    cur_fac, cur_deg = "", ""
-    for kind, _, data in events:
-        if kind == "fac":
-            cur_fac = data
-        elif kind == "deg":
-            cur_deg = data
+    stg_map: dict[str, dict] = {}
+    cur_fac = cur_deg = ""
+    for kind, _, data in markers:
+        if kind == "fac":    cur_fac = data
+        elif kind == "deg":  cur_deg = data
         elif kind == "stg":
-            programs.append({
-                "fac": cur_fac, "deg": cur_deg, "stg_id": data,
-                "name": stg_info.get(data, ""), "code": stg_labels.get(data, ""),
-            })
+            stg_map[data] = {"fac": cur_fac, "deg": cur_deg,
+                             "name": stg_info.get(data, ""),
+                             "code": stg_labels.get(data, "")}
 
-    # 3. Map stg_id → program info for leaf-group enrichment
-    stg_map = {p["stg_id"]: p for p in programs}
-
-    # 4. Find all leaf groups (semester groups with StgruSet onclick)
+    # Collect leaf groups
     flat: list[dict] = []
     for m in re.finditer(
-        r'<li\b([^>]*)>\s*<a\b[^>]*class="menu_stgru_link"[^>]*>([^<]+)</a>',
-        html,
+        r'<li\b([^>]*)>\s*<a\b[^>]*class="menu_stgru_link"[^>]*>([^<]+)</a>', html,
     ):
-        attrs, label = m.group(1), m.group(2).strip()
-        stg_m = re.search(r'StgruSet\((\d+),\s*(\d+)\)', attrs)
-        if not stg_m:
+        sm = re.search(r'StgruSet\((\d+),\s*(\d+)\)', m.group(1))
+        if not sm:
             continue
-        stg_id, stgru = stg_m.group(1), stg_m.group(2)
-        prog = stg_map.get(stg_id, {})
+        prog = stg_map.get(sm.group(1), {})
         flat.append({
-            "label": label, "stg": stg_id, "stgru": stgru,
-            "faculty": prog.get("fac", ""),
-            "degree": prog.get("deg", ""),
-            "program_code": prog.get("code", ""),
-            "program_name": prog.get("name", ""),
+            "label": m.group(2).strip(), "stg": sm.group(1), "stgru": sm.group(2),
+            "faculty": prog.get("fac", ""), "degree": prog.get("deg", ""),
+            "program_code": prog.get("code", ""), "program_name": prog.get("name", ""),
         })
 
-    # 5. Build tree: Faculty → Degree → Program → Groups
+    # Build tree: Faculty → Degree → Program → Groups
     tree: list[dict] = []
     fac_idx: dict[str, dict] = {}
     for grp in flat:
-        fac_key = grp["faculty"] or "Sonstige"
-        if fac_key not in fac_idx:
-            fac_node = {"label": fac_key, "degrees": []}
-            fac_idx[fac_key] = fac_node
-            tree.append(fac_node)
-        fac_node = fac_idx[fac_key]
+        fk = grp["faculty"] or "Sonstige"
+        if fk not in fac_idx:
+            fac_idx[fk] = {"label": fk, "degrees": []}
+            tree.append(fac_idx[fk])
+        fac = fac_idx[fk]
 
-        deg_key = grp["degree"] or "Sonstige"
-        deg_node = next((d for d in fac_node["degrees"] if d["label"] == deg_key), None)
-        if not deg_node:
-            deg_node = {"label": deg_key, "programs": []}
-            fac_node["degrees"].append(deg_node)
+        dk = grp["degree"] or "Sonstige"
+        deg = next((d for d in fac["degrees"] if d["label"] == dk), None)
+        if not deg:
+            deg = {"label": dk, "programs": []}
+            fac["degrees"].append(deg)
 
-        prog_key = grp["program_code"] or grp["label"]
-        prog_node = next((p for p in deg_node["programs"] if p["code"] == prog_key), None)
-        if not prog_node:
-            prog_node = {"code": prog_key, "name": grp["program_name"], "groups": []}
-            deg_node["programs"].append(prog_node)
-
-        prog_node["groups"].append(grp)
+        pk = grp["program_code"] or grp["label"]
+        prog = next((p for p in deg["programs"] if p["code"] == pk), None)
+        if not prog:
+            prog = {"code": pk, "name": grp["program_name"], "groups": []}
+            deg["programs"].append(prog)
+        prog["groups"].append(grp)
 
     return {"tree": tree, "flat": flat}
 
-def normalize_event(raw) -> dict | None:
-    """Convert Primuss event list → clean dict with metadata for grouping."""
+
+def _normalize_event(raw) -> dict | None:
+    """Convert Primuss event list → clean dict."""
     if not isinstance(raw, list) or len(raw) < 4:
         return None
 
-    dtstart = _parse_primuss_dt(str(raw[2]))
-    dtend   = _parse_primuss_dt(str(raw[3]))
+    dtstart = _parse_dt(str(raw[2]))
+    dtend   = _parse_dt(str(raw[3]))
     if not dtstart:
         return None
 
@@ -458,27 +375,21 @@ def normalize_event(raw) -> dict | None:
 
     room     = str(raw[22]).strip() if len(raw) > 22 and raw[22] else ""
     lecturer = str(raw[12]).removeprefix("bei ").strip() if len(raw) > 12 and raw[12] else ""
-
-    desc_parts = []
-    if lecturer:
-        desc_parts.append(f"Dozent: {lecturer}")
+    desc = f"Dozent: {lecturer}" if lecturer else ""
     if meta.get("kommentar"):
-        desc_parts.append(meta["kommentar"])
+        desc = f"{desc}\n{meta['kommentar']}" if desc else meta["kommentar"]
 
     return {
-        "summary":     summary,
-        "dtstart":     dtstart,
-        "dtend":       dtend or dtstart,
-        "location":    room,
-        "description": "\n".join(desc_parts),
-        # Metadata for frontend grouping & disambiguation
-        "lv_id":       str(meta.get("lv_id", "")),
-        "fach_name":   meta.get("fach_name", ""),
-        "fach_id":     str(meta.get("fach_id", "")),
-        "rhythmus":    str(meta.get("rhythmus", "")),
+        "summary": summary, "dtstart": dtstart, "dtend": dtend or dtstart,
+        "location": room, "description": desc,
+        "lv_id": str(meta.get("lv_id", "")),
+        "fach_name": meta.get("fach_name", ""),
+        "fach_id": str(meta.get("fach_id", "")),
+        "rhythmus": str(meta.get("rhythmus", "")),
     }
 
-def dedupe(events: list[dict]) -> list[dict]:
+
+def _dedupe(events: list[dict]) -> list[dict]:
     seen, out = set(), []
     for ev in events:
         key = (ev["summary"], ev["dtstart"], ev["dtend"], ev["location"])
@@ -488,9 +399,73 @@ def dedupe(events: list[dict]) -> list[dict]:
     return out
 
 
+async def _fetch_timetable(stgru: str, retry: bool = True) -> dict:
+    """Fetch all events for a study group across the current semester."""
+    s = await _ensure_session()
+    cookies = _parse_cookies(s["cookies"])
+    sem_start, sem_end = _current_semester()
+    mondays = list(_week_mondays(sem_start, sem_end))
+
+    base = {"viewtype": "week", "timezone": "1", "mode": "calendar",
+            "Session": s["session"], "User": s["user"], "stgru": stgru}
+    sem = asyncio.Semaphore(3)
+
+    async def fetch_week(client: httpx.AsyncClient, monday: date):
+        async with sem:
+            try:
+                r = await client.post(
+                    f"{PRIMUSS_URL}?FH={FH}&Language={LANG}&sem={SEM}&method=list",
+                    data={**base, "showdate": _primuss_date(monday)},
+                    cookies=cookies, timeout=15,
+                    headers={"User-Agent": _UA,
+                             "X-Requested-With": "XMLHttpRequest",
+                             "Accept": "application/json, text/javascript, */*; q=0.01",
+                             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+            except httpx.TimeoutException:
+                return None
+            if r.status_code in (301, 302):
+                return "redirect"
+            try:
+                return r.json()
+            except Exception:
+                return None
+
+    async with httpx.AsyncClient(follow_redirects=False) as client:
+        results = await asyncio.gather(*[fetch_week(client, m) for m in mondays])
+
+    events: list[dict] = []
+    had_redirect = False
+    for data in results:
+        if data is None:
+            continue
+        if data == "redirect":
+            had_redirect = True
+            continue
+        for raw in (data.get("events", []) if isinstance(data, dict) else []):
+            ev = _normalize_event(raw)
+            if ev:
+                events.append(ev)
+
+    if had_redirect and not events:
+        if retry:
+            await _ensure_session(force=True)
+            return await _fetch_timetable(stgru, retry=False)
+        raise HTTPException(502, "Primuss-Session konnte nicht erneuert werden.")
+
+    return {"events": _dedupe(events), "weeks": len(mondays),
+            "semester": f"{sem_start.isoformat()} – {sem_end.isoformat()}"}
+
+
 # ═══════════════════════════════════════════════════════════════════
-# 8. ICS generation
+# 6. ICS generation
 # ═══════════════════════════════════════════════════════════════════
+
+def _to_dt(s: str) -> datetime:
+    s = s.replace("Z", "+00:00").strip()
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return datetime.fromisoformat(s[:19])
 
 def build_ics(events: list[dict]) -> bytes:
     cal = Calendar()
@@ -504,8 +479,8 @@ def build_ics(events: list[dict]) -> bytes:
     for ev in events:
         ie = IcsEvent()
         ie.add("summary", ev.get("summary", "Veranstaltung"))
-        ie.add("dtstart", _parse_ics_dt(ev["dtstart"]))
-        ie.add("dtend",   _parse_ics_dt(ev.get("dtend", ev["dtstart"])))
+        ie.add("dtstart", _to_dt(ev["dtstart"]))
+        ie.add("dtend",   _to_dt(ev.get("dtend", ev["dtstart"])))
         ie.add("dtstamp", datetime.now(timezone.utc))
         if ev.get("location"):
             ie.add("location", vText(ev["location"]))
@@ -517,121 +492,32 @@ def build_ics(events: list[dict]) -> bytes:
 
     return cal.to_ical()
 
-def _parse_ics_dt(s: str) -> datetime:
-    s = s.replace("Z", "+00:00").strip()
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        return datetime.fromisoformat(s[:19])
-
 
 # ═══════════════════════════════════════════════════════════════════
-# 9. FastAPI app & routes
+# 7. FastAPI app & routes
 # ═══════════════════════════════════════════════════════════════════
 
 app = FastAPI(title="Stundenplan Generator", docs_url=None, redoc_url=None)
 
 
-@app.get("/api/status")
-async def status():
-    return {
-        "credentials": bool(ENV_USERNAME and ENV_PASSWORD),
-        "totp":        bool(ENV_TOTP_SECRET),
-        "username":    ENV_USERNAME,
-    }
+class TimetableRequest(BaseModel):
+    stgru: str
+
+class IcsRequest(BaseModel):
+    events: list[dict]
 
 
-@app.get("/api/session")
-async def session():
-    """Return cached session if still valid (avoids re-login on refresh)."""
-    cached = get_cached_session()
-    if cached:
-        return cached
-    return {"valid": False}
-
-
-@app.post("/api/login")
-async def login(req: LoginRequest):
-    username = req.username or ENV_USERNAME
-    password = req.password or ENV_PASSWORD
-    if not username or not password:
-        raise HTTPException(400, "Keine Zugangsdaten — .env mit USERNAME/PASSWORD anlegen.")
-    result = await shibboleth_login(username, password)
-    if "cookies" in result:   # full success (not MFA prompt)
-        cache_session(result)
-    return JSONResponse(result)
-
-
-@app.post("/api/login/mfa")
-async def login_mfa(req: MfaRequest):
-    result = await shibboleth_mfa(req.state_id, req.totp)
-    cache_session(result)
-    return JSONResponse(result)
+@app.get("/api/init")
+async def init():
+    """Auto-authenticate and return the course tree."""
+    s = await _ensure_session()
+    return {"course_tree": s["course_tree"]}
 
 
 @app.post("/api/timetable")
 async def timetable(req: TimetableRequest):
-    cookies = parse_cookies(req.cookies)
-    sem_start, sem_end = current_semester()
-    mondays = list(week_mondays(sem_start, sem_end))
-
-    base_form = {
-        "viewtype": "week", "timezone": "1",
-        "Session": req.session, "User": req.user,
-        "mode": "calendar", "stgru": req.stgru,
-    }
-
-    sem = asyncio.Semaphore(3)
-
-    async def fetch_week(client: httpx.AsyncClient, monday: date):
-        async with sem:
-            url  = f"{PRIMUSS_URL}?FH={FH}&Language={LANG}&sem={SEM}&method=list"
-            form = {**base_form, "showdate": primuss_date(monday)}
-            try:
-                r = await client.post(url, data=form, cookies=cookies, headers={
-                    "User-Agent":       HEADERS["User-Agent"],
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Accept":           "application/json, text/javascript, */*; q=0.01",
-                    "Origin":           "https://www3.primuss.de",
-                    "Referer":          f"{PRIMUSS_URL}?FH={FH}&Language={LANG}&Session={req.session}&User={req.user}",
-                    "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
-                }, timeout=15)
-            except httpx.TimeoutException:
-                return None
-            if r.status_code in (301, 302):
-                return "redirect"
-            try:
-                return r.json()
-            except Exception:
-                return None
-
-    async with httpx.AsyncClient(follow_redirects=False) as client:
-        results = await asyncio.gather(*[fetch_week(client, m) for m in mondays])
-
-    all_events: list[dict] = []
-    had_redirect = False
-
-    for data in results:
-        if data is None:
-            continue
-        if data == "redirect":
-            had_redirect = True
-            continue
-        events = data.get("events", []) if isinstance(data, dict) else []
-        for raw in events:
-            ev = normalize_event(raw)
-            if ev:
-                all_events.append(ev)
-
-    if had_redirect and not all_events:
-        invalidate_session(req.user)
-        raise HTTPException(401, "Session abgelaufen — bitte neu einloggen.")
-
-    return {
-        "events": dedupe(all_events),
-        "weeks":  len(mondays),
-        "semester": f"{sem_start.isoformat()} – {sem_end.isoformat()}",
-    }
+    """Fetch events for a study group (auto-retries on expired session)."""
+    return await _fetch_timetable(req.stgru)
 
 
 @app.post("/api/ics")

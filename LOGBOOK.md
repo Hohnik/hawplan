@@ -1,5 +1,17 @@
 # Logbook
 
+## 2026-03-03 — Remove login page, server-side session
+
+**Removed:** `login-view.js`, `app-shell.js`, `/api/login`, `/api/login/mfa`, `/api/status`, `/api/session`, `LoginRequest`, `MfaRequest`, MFA mid-flow store (`_mfa_store`, `_save_mfa`, `_pop_mfa`), `shibboleth_mfa()`, per-user session cache.
+
+**Added:** `_ensure_session(force)` — single server-side session with `asyncio.Lock` to prevent concurrent re-auth. `_fetch_timetable(stgru, retry)` auto-retries on expired session by calling `_ensure_session(force=True)`. `GET /api/init` returns course tree, auto-authenticating if needed.
+
+**Frontend simplification:** `<timetable-view>` is now self-initializing — calls `/api/init` on mount, shows spinner, then tree. No session prop, no login routing, no "Abmelden". Mounted directly in `index.html` (no app-shell wrapper).
+
+**Cleanup:** Removed `padding: 0` from global `*` reset (was overriding `:host` padding). Removed login-only shared styles (banner, code, label, password inputs). Fixed week-grid cluster-based overlap layout.
+
+**Result:** 1718 → 1372 lines (−20%), 5 → 3 JS files. Backend 648 → 534 lines.
+
 ## 2026-03-03 — Faculty→Degree→Program tree from Primuss HTML
 
 **Real hierarchy parsed:** Rewrote `_parse_course_groups()` to extract the full Primuss tree structure: Faculty (orga) → Degree (Bachelor/Master/Sonstige) → Program (stg) → Semester groups. Uses a position-based strategy — locates all structural elements (`<label for="orga_N">`, degree text nodes, `<input id="stg_N">`) by their position in the HTML, then walks them in document order to reconstruct ancestry. This avoids nested `<ol>` regex problems entirely.

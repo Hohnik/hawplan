@@ -16,17 +16,16 @@ const DAY = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 
 /**
  * <timetable-view>
- * Faculty tree picker → course selection → preview → download.
- *
- * Props: .session    { cookies, session, user }
- *        .courseTree  [{ label, degrees: [{ label, programs: [{ code, name, groups }] }] }]
+ * Self-initializing: fetches course tree on mount, then lets user
+ * pick groups → select courses → preview → download ICS.
  */
 export class TimetableView extends LitElement {
   static properties = {
-    session:       { type: Object },
-    courseTree:     { type: Array },
+    _courseTree:    { state: true },
+    _initError:    { state: true },
+    _loading:      { state: true },   // 'init' | null
     _query:        { state: true },
-    _open:         { state: true },   // Set<string> expanded keys ("fac::BW", "deg::BW::Master")
+    _open:         { state: true },   // Set<string> — expanded accordion keys
     _loaded:       { state: true },   // Map<stgru, { label, courses[] }>
     _loadingStgru: { state: true },
     _selected:     { state: true },   // Set<courseId>
@@ -36,6 +35,16 @@ export class TimetableView extends LitElement {
   };
 
   static styles = [shared, css`
+    /* ── Init state ───────────────────── */
+    .center {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 0.75rem; padding: 2rem 0;
+    }
+    .big-spinner {
+      width: 28px; height: 28px; border-width: 3px;
+      border-color: rgba(108,140,255,0.2); border-top-color: var(--accent);
+    }
+
     /* ── Tree accordion ───────────────── */
     .tree {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -140,21 +149,20 @@ export class TimetableView extends LitElement {
 
     /* ── Footer / Done ─────────────────── */
     .foot { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
-    .stats { font-size: 0.82rem; color: var(--muted); margin-left: auto; }
+    .stats { font-size: 0.82rem; color: var(--muted); flex: 1; }
 
     .done {
       text-align: center; padding: 1.5rem 0;
       display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
     }
     .done h3 { font-size: 1.05rem; color: var(--success); }
-
-    input[type='search'] { padding: 0.4rem 0.8rem; font-size: 0.84rem; }
   `];
 
   constructor() {
     super();
-    this.session = null;
-    this.courseTree = [];
+    this._courseTree = [];
+    this._initError = '';
+    this._loading = 'init';
     this._query = '';
     this._open = new Set();
     this._loaded = new Map();
@@ -165,9 +173,30 @@ export class TimetableView extends LitElement {
     this._done = false;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this._init();
+  }
+
+  /* ═══ Init ═══════════════════════════════════════ */
+
+  async _init() {
+    this._loading = 'init';
+    this._initError = '';
+    try {
+      const res = await fetch('/api/init');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
+      this._courseTree = data.course_tree || [];
+    } catch (e) {
+      this._initError = e.message;
+    }
+    this._loading = null;
+  }
+
   /* ═══ Tree toggle ════════════════════════════════ */
 
-  _toggle_open(key) {
+  _toggleOpen(key) {
     const s = new Set(this._open);
     s.has(key) ? s.delete(key) : s.add(key);
     this._open = s;
@@ -183,16 +212,9 @@ export class TimetableView extends LitElement {
       const res = await fetch('/api/timetable', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cookies: this.session.cookies, session: this.session.session,
-          user: this.session.user, stgru: g.stgru,
-        }),
+        body: JSON.stringify({ stgru: g.stgru }),
       });
       const data = await res.json();
-      if (res.status === 401) {
-        this.dispatchEvent(new CustomEvent('session-expired', { bubbles: true, composed: true }));
-        return;
-      }
       if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
       const courses = this._groupEvents(data.events || [], g);
       const loaded = new Map(this._loaded);
@@ -304,21 +326,32 @@ export class TimetableView extends LitElement {
   /* ═══ Render ═════════════════════════════════════ */
 
   render() {
-    if (this._done) return html`<div class="stack">
-      <div class="done">
-        <h3>🎉 stundenplan.ics heruntergeladen</h3>
-        <p class="hint">Öffne die Datei in Google Calendar, Apple Kalender oder Outlook.</p>
-        <div class="row" style="justify-content:center">
+    if (this._loading === 'init') {
+      return html`<div class="center">
+        <span class="spinner big-spinner"></span>
+        <p class="hint">Verbinde mit Primuss…</p>
+      </div>`;
+    }
+
+    if (this._initError) {
+      return html`<div class="stack">
+        <p class="error-msg">❌ ${this._initError}</p>
+        <button class="btn-primary" @click=${this._init}>Erneut versuchen</button>
+      </div>`;
+    }
+
+    if (this._done) {
+      return html`<div class="stack">
+        <div class="done">
+          <h3>🎉 stundenplan.ics heruntergeladen</h3>
+          <p class="hint">Öffne die Datei in Google Calendar, Apple Kalender oder Outlook.</p>
           <button class="btn-primary" @click=${() => { this._done = false; }}>← Zurück</button>
-          <button class="btn-ghost" @click=${() =>
-            this.dispatchEvent(new CustomEvent('restart', { bubbles: true, composed: true }))}>
-            Neuer Plan</button>
         </div>
-      </div>
-    </div>`;
+      </div>`;
+    }
 
     return html`<div class="stack">
-      <h2><span class="badge">2</span> Stundenplan</h2>
+      <h2>Stundenplan</h2>
       ${this._renderPicker()}
       ${this._loaded.size > 0 ? this._renderCourses() : ''}
       ${this._previewSlots.length > 0 ? html`
@@ -347,12 +380,11 @@ export class TimetableView extends LitElement {
              .value=${this._query} @input=${e => this._query = e.target.value} />
 
       <div class="tree">
-        ${(this.courseTree || []).map(fac => this._renderFac(fac, q, loadedKeys))}
+        ${(this._courseTree || []).map(fac => this._renderFac(fac, q, loadedKeys))}
       </div>`;
   }
 
   _renderFac(fac, q, loadedKeys) {
-    // Collect all groups under this faculty, apply search filter
     const allGroups = fac.degrees.flatMap(d => d.programs.flatMap(p => p.groups));
     const matches = q
       ? allGroups.filter(g => g.label.toLowerCase().includes(q)
@@ -361,12 +393,12 @@ export class TimetableView extends LitElement {
       : allGroups;
     if (!matches.length) return '';
 
-    const fKey = `fac::${fac.label}`;
-    const open = q || this._open.has(fKey);
+    const key = `fac::${fac.label}`;
+    const open = q || this._open.has(key);
     const loadedN = allGroups.filter(g => loadedKeys.has(g.stgru)).length;
 
     return html`
-      <div class="row-fac" @click=${() => !q && this._toggle_open(fKey)}>
+      <div class="row-fac" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
         ${fac.label}
         <span class="count">${allGroups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}</span>
@@ -383,11 +415,11 @@ export class TimetableView extends LitElement {
       : allGroups;
     if (!matches.length) return '';
 
-    const dKey = `deg::${fac.label}::${deg.label}`;
-    const open = q || this._open.has(dKey);
+    const key = `deg::${fac.label}::${deg.label}`;
+    const open = q || this._open.has(key);
 
     return html`
-      <div class="row-deg" @click=${() => !q && this._toggle_open(dKey)}>
+      <div class="row-deg" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
         ${deg.label}
         <span class="count">${allGroups.length}</span>
@@ -403,11 +435,11 @@ export class TimetableView extends LitElement {
       : prog.groups;
     if (!groups.length) return '';
 
-    const pKey = `prog::${fac.label}::${prog.code}`;
-    const open = q || this._open.has(pKey);
+    const key = `prog::${fac.label}::${prog.code}`;
+    const open = q || this._open.has(key);
 
     return html`
-      <div class="row-prog" @click=${() => !q && this._toggle_open(pKey)}>
+      <div class="row-prog" @click=${() => !q && this._toggleOpen(key)}>
         <span class="arrow">${open ? '▾' : '▸'}</span>
         <span class="prog-name">${prog.name || prog.code}</span>
         <span class="count">${groups.length}</span>
@@ -465,9 +497,6 @@ export class TimetableView extends LitElement {
   _renderFooter() {
     return html`
       <div class="foot">
-        <button class="btn-ghost" @click=${() =>
-          this.dispatchEvent(new CustomEvent('restart', { bubbles: true, composed: true }))}>
-          ← Abmelden</button>
         <span class="stats">${this._selectedCourses.length} Kurse · ${this._totalEvents} Termine</span>
         <button class="btn-primary"
                 ?disabled=${this._downloading || !this._selectedCourses.length}

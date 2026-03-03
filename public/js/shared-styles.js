@@ -16,32 +16,15 @@ export const shared = css`
   h2 {
     font-size: 1.05rem; font-weight: 600;
     display: flex; align-items: center; gap: 0.55rem;
-    margin-bottom: 0.15rem;
-  }
-  .badge {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 1.5rem; height: 1.5rem; border-radius: 50%;
-    background: var(--accent); color: #fff;
-    font-size: 0.72rem; font-weight: 700; flex-shrink: 0;
   }
   .hint { font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
-  code {
-    background: var(--accent-bg); color: var(--accent-h);
-    padding: 0.1em 0.35em; border-radius: 4px;
-    font-family: var(--mono); font-size: 0.82em;
-  }
 
   /* ── Layout ──────────────────────────────── */
   .stack   { display: flex; flex-direction: column; gap: 1rem; }
   .row     { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-  .divider { height: 1px; background: var(--border); }
 
   /* ── Inputs ──────────────────────────────── */
-  label {
-    display: block; font-size: 0.82rem; font-weight: 500;
-    color: var(--muted); margin-bottom: 0.25rem;
-  }
-  input[type='text'], input[type='password'], input[type='search'] {
+  input[type='search'] {
     width: 100%; background: var(--bg);
     border: 1px solid var(--border); border-radius: var(--radius-sm);
     color: var(--text); font-family: var(--font); font-size: 0.85rem;
@@ -84,12 +67,6 @@ export const shared = css`
     padding: 0.5rem 0.8rem; background: var(--error-bg);
     border: 1px solid var(--error-bdr); border-radius: var(--radius-sm);
   }
-  .banner {
-    padding: 0.55rem 0.85rem; border-radius: var(--radius-sm);
-    font-size: 0.84rem; border: 1px solid;
-  }
-  .banner-ok   { background: rgba(86,211,100,0.08); border-color: rgba(86,211,100,0.3); color: var(--success); }
-  .banner-info { background: var(--accent-bg); border-color: rgba(108,140,255,0.25); color: var(--text); }
 
   /* ── Spinner ─────────────────────────────── */
   .spinner {
@@ -98,7 +75,4 @@ export const shared = css`
     border-radius: 50%; animation: spin 0.5s linear infinite; flex-shrink: 0;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
 `;

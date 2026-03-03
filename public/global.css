@@ -47,10 +47,7 @@ footer {
   opacity: 0.6;
 }
 
-app-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
+timetable-view {
   width: 100%;
   max-width: 660px;
 }
