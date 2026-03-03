@@ -95,6 +95,9 @@ def normalize_event(raw: dict) -> dict | None:
       Ende / ende / EndTime / Bis / end / dtend
     """
 
+    if not isinstance(raw, dict):
+        return None   # skip nested lists / scalars that slip through extract_items
+
     def get(*keys):
         for k in keys:
             v = raw.get(k)
@@ -158,15 +161,25 @@ def normalize_event(raw: dict) -> dict | None:
     }
 
 
-def extract_items(data) -> list[dict] | None:
-    """Try to extract a list of event dicts from various Primuss response shapes."""
+def extract_items(data) -> list | None:
+    """
+    Extract a flat list of items from any Primuss response shape, including
+    nested lists like [[ev, ev], [ev]] or dicts wrapping a list.
+    """
     if isinstance(data, list):
-        return data
+        flat = []
+        for item in data:
+            if isinstance(item, list):
+                flat.extend(item)   # flatten one level: [[a,b],[c]] → [a,b,c]
+            else:
+                flat.append(item)
+        return flat or None
     if isinstance(data, dict):
         for key in ("list", "data", "rows", "events", "items", "result",
                     "veranstaltungen", "termine", "stundenplan"):
-            if isinstance(data.get(key), list):
-                return data[key]
+            v = data.get(key)
+            if isinstance(v, list):
+                return extract_items(v)   # recurse to handle nested lists in values
     return None
 
 
@@ -223,8 +236,9 @@ async def fetch_all(req: FetchRequest):
         except Exception:
             return {"_raw_text": r.text[:1000], "_status": r.status_code}, monday
 
-    all_events: list[dict] = []
-    first_raw  = None   # keep the very first raw response for debugging
+    all_events:  list[dict] = []
+    first_raw    = None   # full first-week API response (for debug panel)
+    first_items  = None   # raw items from first week before normalisation
     had_redirect = False
 
     # Fire requests with a small concurrency limit (be polite to the server)
@@ -249,6 +263,8 @@ async def fetch_all(req: FetchRequest):
 
         items = extract_items(data)
         if items:
+            if first_items is None:
+                first_items = items[:3]   # first 3 raw items for the debug panel
             for raw_ev in items:
                 ev = normalize_event(raw_ev)
                 if ev:
@@ -263,10 +279,11 @@ async def fetch_all(req: FetchRequest):
     all_events = dedupe_events(all_events)
 
     return JSONResponse({
-        "events":    all_events,
-        "count":     len(all_events),
-        "weeks":     len(mondays),
-        "_first_raw": first_raw,   # sent to frontend debug panel
+        "events":      all_events,
+        "count":       len(all_events),
+        "weeks":       len(mondays),
+        "_first_raw":  first_raw,    # full first-week response (debug)
+        "_first_items": first_items, # first 3 raw items before normalisation (debug)
     })
 
 

@@ -16,9 +16,10 @@ import { base } from './shared-styles.js';
  */
 export class StepEvents extends LitElement {
   static properties = {
-    events:   { type: Array  },
-    weeks:    { type: Number },
-    rawFirst: { type: Object },
+    events:     { type: Array  },
+    weeks:      { type: Number },
+    rawFirst:   { type: Object },
+    rawItems:   { type: Array  },   // first 3 raw items before normalisation
 
     _query:   { state: true },
     _selected:{ state: true },   // Set of event indices
@@ -115,9 +116,10 @@ export class StepEvents extends LitElement {
 
   constructor() {
     super();
-    this.events   = [];
-    this.weeks    = 0;
-    this.rawFirst = null;
+    this.events    = [];
+    this.weeks     = 0;
+    this.rawFirst  = null;
+    this.rawItems  = null;
     this._query   = '';
     this._selected = new Set();
     this._loading = false;
@@ -177,10 +179,18 @@ export class StepEvents extends LitElement {
 
   /* ── render ──────────────────────────────────────────────── */
   _renderDebug() {
+    // Prefer showing the first few raw items (most useful for field-name debugging)
+    // Fall back to the full first-week response if items weren't extracted.
+    const debugData = this.rawItems ?? this.rawFirst;
     return html`
       <div class="debug">
-        <strong>🐛 Unbekanntes Antwortformat — bitte teile diesen Output:</strong>
-        <pre>${JSON.stringify(this.rawFirst, null, 2)}</pre>
+        <strong>🐛 Events gefunden, aber Feldnamen unbekannt — bitte teile diesen Output:</strong>
+        <p style="margin-top:.4rem;font-size:.78rem;color:var(--muted)">
+          ${this.rawItems
+            ? `Erste ${this.rawItems.length} Einträge (vor Normalisierung):`
+            : 'Rohe API-Antwort (erste Woche):'}
+        </p>
+        <pre>${JSON.stringify(debugData, null, 2)}</pre>
       </div>
     `;
   }

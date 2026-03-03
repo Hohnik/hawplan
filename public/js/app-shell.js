@@ -10,10 +10,11 @@ import './step-done.js';
  */
 export class AppShell extends LitElement {
   static properties = {
-    _step:   { state: true },  // 1 | 2 | 3
-    _events: { state: true },  // normalised events from backend
-    _weeks:  { state: true },
-    _raw:    { state: true },  // first-week raw response (debug)
+    _step:     { state: true },  // 1 | 2 | 3
+    _events:   { state: true },  // normalised events from backend
+    _weeks:    { state: true },
+    _raw:      { state: true },  // first-week raw response (debug)
+    _rawItems: { state: true },  // first 3 raw items before normalisation (debug)
   };
 
   /* No shadow DOM so global.css layout rules (gap etc.) apply to :host */
@@ -21,10 +22,11 @@ export class AppShell extends LitElement {
 
   constructor() {
     super();
-    this._step   = 1;
-    this._events = [];
-    this._weeks  = 0;
-    this._raw    = null;
+    this._step     = 1;
+    this._events   = [];
+    this._weeks    = 0;
+    this._raw      = null;
+    this._rawItems = null;
   }
 
   /* ── Event routing ───────────────────────────────────────── */
@@ -61,9 +63,10 @@ export class AppShell extends LitElement {
         return;
       }
 
-      this._events = data.events ?? [];
-      this._weeks  = data.weeks  ?? 0;
-      this._raw    = data._first_raw ?? null;
+      this._events    = data.events       ?? [];
+      this._weeks     = data.weeks        ?? 0;
+      this._raw       = data._first_raw   ?? null;
+      this._rawItems  = data._first_items ?? null;
 
       credEl.setLoading(false);
       this._step = 2;
@@ -138,6 +141,7 @@ export class AppShell extends LitElement {
           .events=${this._events}
           .weeks=${this._weeks}
           .rawFirst=${this._raw}
+          .rawItems=${this._rawItems}
         ></step-events>
       ` : ''}
 
