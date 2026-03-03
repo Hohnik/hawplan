@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin
 import httpx
 import asyncio
+import uuid
 from io import BytesIO
 from icalendar import Calendar, Event, vText
 from datetime import datetime, timedelta, timezone, date
@@ -36,6 +37,10 @@ BROWSER_HEADERS = {
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+class MfaRequest(BaseModel):
+    state_id: str
+    totp:     str
 
 class FetchRequest(BaseModel):
     cookies:   str          # "PHPSESSID=abc; _shibsession_xyz=def"
@@ -120,41 +125,142 @@ def cookies_to_str(jar: httpx.Cookies) -> str:
 
 # ── Shibboleth auto-login ─────────────────────────────────────────
 
-async def shibboleth_login(username: str, password: str) -> dict:
+# ── MFA session store ─────────────────────────────────────────────
+# Stores intermediate login state between phase-1 and phase-2 requests.
+# Keyed by a random UUID, expires after 5 minutes.
+_mfa_store: dict[str, dict] = {}
+_MFA_TTL   = timedelta(minutes=5)
+
+def _store_mfa_state(cookies: dict, action: str, fields: dict, token_field: str) -> str:
+    _purge_mfa_store()
+    sid = str(uuid.uuid4())
+    _mfa_store[sid] = {
+        "cookies":     cookies,
+        "action":      action,
+        "fields":      fields,
+        "token_field": token_field,
+        "created":     datetime.now(),
+    }
+    return sid
+
+def _pop_mfa_state(state_id: str) -> dict:
+    _purge_mfa_store()
+    state = _mfa_store.pop(state_id, None)
+    if state is None:
+        raise HTTPException(
+            status_code=400,
+            detail="MFA-Session abgelaufen oder ungültig. Bitte neu einloggen.",
+        )
+    return state
+
+def _purge_mfa_store():
+    cutoff = datetime.now() - _MFA_TTL
+    expired = [k for k, v in _mfa_store.items() if v["created"] < cutoff]
+    for k in expired:
+        del _mfa_store[k]
+
+
+# ── Shibboleth field-name sets ────────────────────────────────────
+_USERNAME_KEYS = {"j_username", "username", "user", "uid", "login"}
+_PASSWORD_KEYS = {"j_password", "password", "pass", "passwd", "pw"}
+# Token fields: covers Shibboleth MFA / TOTP / AD OTP variants
+_TOKEN_KEYS    = {
+    "j_tokennumber", "tokennumber", "token",
+    "otp", "totp", "mfa", "passcode", "code", "pin",
+    "_shib_idp_mfa_otp", "authn_code", "response",
+}
+# Fields we know are never the token
+_BORING_FIELDS = {
+    "csrf_token", "_eventid_proceed", "shib_idp_ls_supported",
+    "execution", "samlrequest", "relaystate",
+}
+
+
+def _find_field(fields: dict, key_set: set[str]) -> str | None:
+    return next((k for k in fields if k.lower() in key_set), None)
+
+def _is_mfa_form(fields: dict) -> bool:
+    """Heuristic: a form is an MFA form if it has no password field and at least
+    one field that isn't a known boring hidden field or CSRF token."""
+    has_pw = _find_field(fields, _PASSWORD_KEYS)
+    if has_pw:
+        return False
+    interesting = [
+        k for k in fields
+        if k.lower() not in _BORING_FIELDS
+        and not k.lower().startswith("shib_idp_ls_")
+    ]
+    return bool(interesting)
+
+def _guess_token_field(fields: dict) -> str | None:
+    """Return the most likely token field name."""
+    # 1. Exact known name
+    known = _find_field(fields, _TOKEN_KEYS)
+    if known:
+        return known
+    # 2. Fallback: first field that isn't boring
+    for k in fields:
+        if k.lower() not in _BORING_FIELDS and not k.lower().startswith("shib_idp_ls_"):
+            return k
+    return None
+
+
+async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
+    """POST the SAMLResponse form to the SP ACS and extract the final session."""
+    forms     = FormExtractor.parse(r.text)
+    saml_form = next((f for f in forms if "SAMLResponse" in f["fields"]), None)
+    if not saml_form:
+        raise HTTPException(status_code=502, detail="SAML-Assertion-Formular nicht gefunden.")
+
+    acs_url = saml_form["action"]
+    if not acs_url.startswith("http"):
+        acs_url = urljoin(str(r.url), acs_url)
+
+    r_final = await client.post(
+        acs_url, data=saml_form["fields"],
+        headers={**BROWSER_HEADERS, "Referer": str(r.url),
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+
+    final_url  = str(r_final.url)
+    cookie_str = cookies_to_str(client.cookies)
+
+    if not cookie_str:
+        raise HTTPException(status_code=502,
+                            detail="Login erfolgreich, aber keine Cookies erhalten.")
+
+    session = (m.group(1) if (m := re.search(r"[?&]Session=([^&#]+)", final_url)) else "")
+    user    = (m.group(1) if (m := re.search(r"[?&]User=([^&#]+)",    final_url)) else "")
+    stgru   = await detect_stgru(client, session, user, cookie_str)
+    return {"cookies": cookie_str, "session": session, "user": user, "stgru": stgru}
+
+
+async def shibboleth_phase1(username: str, password: str) -> dict:
     """
-    Automate the full Shibboleth SSO flow for HS Landshut / Primuss.
+    Phase 1: walk through IDP forms until we either:
+      (a) get a SAMLResponse  → complete the flow, return session data
+      (b) hit an MFA form     → store state, return { requires_mfa, state_id }
 
-    The IDP uses a multi-step form flow:
-      e1s1 — "local storage check" (hidden fields, no credentials, submit as-is)
-      e1s2 — real login form (csrf_token + j_username + j_password)
-      →  SAMLResponse form  →  POST to SP ACS  →  Primuss session cookies
-
-    We handle this generically: loop through forms, submit intermediate ones
-    as-is, inject credentials only when a password field is detected.
+    The IDP flow for HS Landshut:
+      e1s1  local-storage-check  (no credentials, submit as-is)
+      e1s2  login form           (j_username + j_password)
+      e1s3  MFA / TOTP form      (token field — varies)
+      →  SAMLResponse → ACS
     """
-    _USERNAME_KEYS = {"j_username", "username", "user", "uid", "login"}
-    _PASSWORD_KEYS = {"j_password", "password", "pass", "passwd", "pw"}
-
     async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=30.0,
-        headers=BROWSER_HEADERS,
+        follow_redirects=True, timeout=30.0, headers=BROWSER_HEADERS,
     ) as client:
-
-        # ── 1. Reach IDP (follows all SP→IDP redirects automatically) ─
         r = await client.get(
             f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANGUAGE}"
         )
+        credentials_sent = False
 
-        # ── 2. Walk through IDP form steps ────────────────────────────
-        #  Keep submitting forms until we land on the SAMLResponse form.
-        #  Limit to 6 iterations to guard against redirect loops.
-        for step in range(6):
+        for step in range(8):
             forms = FormExtractor.parse(r.text)
             if not forms:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Kein Formular bei Schritt {step + 1} gefunden (URL: {r.url})",
+                    detail=f"Kein Formular bei Schritt {step+1} (URL: {r.url})",
                 )
 
             form   = forms[0]
@@ -163,91 +269,98 @@ async def shibboleth_login(username: str, password: str) -> dict:
             if not action.startswith("http"):
                 action = urljoin(str(r.url), action)
 
-            # Found SAML assertion → exit the loop and POST to ACS
+            # ── SAMLResponse: ready to finish ────────────────────────
             if "SAMLResponse" in fields:
-                break
+                return await _finish_saml(client, r)
 
-            # Detect whether this step has a password field
-            pw_field   = next((k for k in fields if k.lower() in _PASSWORD_KEYS), None)
-            user_field = next((k for k in fields if k.lower() in _USERNAME_KEYS), None)
+            pw_field   = _find_field(fields, _PASSWORD_KEYS)
+            user_field = _find_field(fields, _USERNAME_KEYS)
 
+            # ── Login form: inject credentials ───────────────────────
             if pw_field:
-                # ── This is the actual login form — inject credentials ──
-                if user_field:
-                    fields[user_field] = username
-                else:
-                    fields["j_username"] = username   # fallback
-                fields[pw_field] = password
-            # else: intermediate step (local storage check etc.) — submit as-is
+                fields[user_field or "j_username"] = username
+                fields[pw_field]                   = password
+                credentials_sent = True
+                r = await client.post(
+                    action, data=fields,
+                    headers={**BROWSER_HEADERS, "Referer": str(r.url),
+                             "Content-Type": "application/x-www-form-urlencoded"},
+                )
+                # If IDP returns another password form → wrong credentials
+                nf = FormExtractor.parse(r.text)
+                if (not any("SAMLResponse" in f["fields"] for f in nf)
+                        and any(_find_field(f["fields"], _PASSWORD_KEYS) for f in nf)):
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Benutzername oder Passwort falsch.",
+                    )
+                continue
 
+            # ── MFA form (after credentials were sent) ───────────────
+            if credentials_sent and _is_mfa_form(fields):
+                token_field = _guess_token_field(fields)
+                if not token_field:
+                    raise HTTPException(
+                        status_code=502,
+                        detail="MFA-Feld nicht erkannt. Bitte manuell einloggen.",
+                    )
+                # Serialise cookie jar so phase-2 can restore it
+                cookie_dict = dict(client.cookies)
+                sid = _store_mfa_state(cookie_dict, action, fields, token_field)
+                return {
+                    "requires_mfa": True,
+                    "state_id":     sid,
+                    "token_field":  token_field,   # hints the UI (e.g. "j_tokenNumber")
+                }
+
+            # ── Intermediate form: submit as-is ──────────────────────
             r = await client.post(
                 action, data=fields,
-                headers={**BROWSER_HEADERS,
-                         "Referer": str(r.url),
+                headers={**BROWSER_HEADERS, "Referer": str(r.url),
                          "Content-Type": "application/x-www-form-urlencoded"},
             )
 
-            # After injecting credentials: if the response still shows a login
-            # form (no SAMLResponse), the credentials were likely wrong.
-            if pw_field:
-                next_forms = FormExtractor.parse(r.text)
-                has_saml   = any("SAMLResponse" in f["fields"] for f in next_forms)
-                has_pw     = any(
-                    any(k.lower() in _PASSWORD_KEYS for k in f["fields"])
-                    for f in next_forms
-                )
-                if not has_saml and has_pw:
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Login fehlgeschlagen — Benutzername oder Passwort falsch.",
-                    )
-        else:
-            raise HTTPException(
-                status_code=502,
-                detail="Login-Flow hat nach 6 Schritten kein SAML-Response geliefert.",
-            )
-
-        # ── 3. POST SAMLResponse to SP ACS ────────────────────────────
-        saml_form = next(
-            (f for f in FormExtractor.parse(r.text) if "SAMLResponse" in f["fields"]),
-            None,
+        raise HTTPException(
+            status_code=502,
+            detail="Login-Flow nach 8 Schritten nicht abgeschlossen.",
         )
-        if not saml_form:
-            raise HTTPException(
-                status_code=502,
-                detail="SAML-Assertion-Formular nicht gefunden.",
-            )
 
-        acs_url = saml_form["action"]
-        if not acs_url.startswith("http"):
-            acs_url = urljoin(str(r.url), acs_url)
 
-        r_final = await client.post(
-            acs_url, data=saml_form["fields"],
+async def shibboleth_phase2(state_id: str, totp: str) -> dict:
+    """
+    Phase 2: restore cookies from phase-1, inject the TOTP into the MFA form,
+    POST it to the IDP, then complete the SAML assertion flow.
+    """
+    state = _pop_mfa_state(state_id)
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=30.0, headers=BROWSER_HEADERS,
+        cookies=state["cookies"],
+    ) as client:
+        fields = dict(state["fields"])
+        fields[state["token_field"]] = totp.strip()
+
+        r = await client.post(
+            state["action"], data=fields,
             headers={**BROWSER_HEADERS,
-                     "Referer": str(r.url),
                      "Content-Type": "application/x-www-form-urlencoded"},
         )
 
-        # ── 4. Extract cookies + Session/User from final URL ──────────
-        final_url   = str(r_final.url)
-        cookie_str  = cookies_to_str(client.cookies)
-
-        session_m = re.search(r"[?&]Session=([^&#]+)", final_url)
-        user_m    = re.search(r"[?&]User=([^&#]+)",    final_url)
-        session   = session_m.group(1) if session_m else ""
-        user      = user_m.group(1)    if user_m    else ""
-
-        if not cookie_str:
+        # Verify we got the SAML form and not another MFA prompt
+        forms = FormExtractor.parse(r.text)
+        if not any("SAMLResponse" in f["fields"] for f in forms):
+            # Check for another MFA form → wrong token
+            if any(_is_mfa_form(f["fields"]) for f in forms):
+                raise HTTPException(
+                    status_code=401,
+                    detail="MFA-Code falsch oder abgelaufen. Bitte erneut versuchen.",
+                )
             raise HTTPException(
                 status_code=502,
-                detail="Login erfolgreich, aber keine Cookies erhalten.",
+                detail="Unerwartete IDP-Antwort nach MFA-Eingabe.",
             )
 
-        # ── 5. Best-effort stgru detection ────────────────────────────
-        stgru = await detect_stgru(client, session, user, cookie_str)
-
-        return {"cookies": cookie_str, "session": session, "user": user, "stgru": stgru}
+        return await _finish_saml(client, r)
 
 
 async def detect_stgru(
@@ -287,11 +400,21 @@ async def detect_stgru(
 @app.post("/api/login")
 async def login(req: LoginRequest):
     """
-    Automate Shibboleth SSO login.
-    Returns { cookies, session, user, stgru } ready to paste into the form.
+    Phase 1 of Shibboleth SSO login.
+    Returns either:
+      { cookies, session, user, stgru }           — login complete (no MFA)
+      { requires_mfa: true, state_id, token_field } — MFA step required
     """
-    result = await shibboleth_login(req.username, req.password)
-    return JSONResponse(result)
+    return JSONResponse(await shibboleth_phase1(req.username, req.password))
+
+
+@app.post("/api/login/verify")
+async def login_verify(req: MfaRequest):
+    """
+    Phase 2: submit the TOTP token to complete the MFA step.
+    Returns { cookies, session, user, stgru }.
+    """
+    return JSONResponse(await shibboleth_phase2(req.state_id, req.totp))
 
 
 @app.post("/api/fetch-all")

@@ -10,15 +10,18 @@ import { base } from './shared-styles.js';
  */
 export class StepCredentials extends LitElement {
   static properties = {
-    _tab:        { state: true },   // 'auto' | 'manual'
-    _authError:  { state: true },
-    _authLoading:{ state: true },
-    _fetchError: { state: true },
+    _tab:         { state: true },   // 'auto' | 'manual'
+    _authPhase:   { state: true },   // 'idle' | 'loading' | 'mfa' | 'done'
+    _authError:   { state: true },
+    _fetchError:  { state: true },
     _fetchLoading:{ state: true },
     // filled by auto-login, or typed manually
     _cookies:    { state: true },
     _session:    { state: true },
     _user:       { state: true },
+    // MFA state
+    _mfaStateId:   { state: true },
+    _mfaTokenField:{ state: true },  // actual field name from IDP (for the hint)
   };
 
   static styles = [base, css`
@@ -99,19 +102,21 @@ export class StepCredentials extends LitElement {
 
   constructor() {
     super();
-    this._tab         = 'auto';
-    this._authError   = '';
-    this._authLoading = false;
-    this._fetchError  = '';
+    this._tab          = 'auto';
+    this._authPhase    = 'idle';   // 'idle' | 'loading' | 'mfa' | 'done'
+    this._authError    = '';
+    this._fetchError   = '';
     this._fetchLoading = false;
-    this._cookies = '';
-    this._session = '';
-    this._user    = '';
+    this._cookies      = '';
+    this._session      = '';
+    this._user         = '';
+    this._mfaStateId    = '';
+    this._mfaTokenField = '';
   }
 
-  // ── called by app-shell to toggle the loading spinner on the submit btn ──
+  // ── called by app-shell ───────────────────────────────────────────────
   setLoading(v) { this._fetchLoading = v; }
-  set _error(v)  { this._fetchError = v; }   // app-shell writes _error directly
+  set _error(v)  { this._fetchError = v; }
 
   // ── Semester date presets ──────────────────────────────────────
   _setDates(from, to) {
@@ -121,17 +126,17 @@ export class StepCredentials extends LitElement {
 
   _q(id) { return this.shadowRoot.getElementById(id); }
 
-  // ── Auto-login ─────────────────────────────────────────────────
+  // ── Auto-login phase 1: username + password ───────────────────
   async _autoLogin() {
-    this._authError   = '';
-    this._authLoading = true;
+    this._authError = '';
+    this._authPhase = 'loading';
 
     const username = this._q('username')?.value.trim() ?? '';
     const password = this._q('password')?.value.trim() ?? '';
 
     if (!username || !password) {
-      this._authError   = 'Benutzername und Passwort sind erforderlich.';
-      this._authLoading = false;
+      this._authError = 'Benutzername und Passwort sind erforderlich.';
+      this._authPhase = 'idle';
       return;
     }
 
@@ -145,32 +150,83 @@ export class StepCredentials extends LitElement {
 
       if (!res.ok) {
         this._authError = data.detail ?? `Fehler ${res.status}`;
+        this._authPhase = 'idle';
         return;
       }
 
-      // Pre-fill all auth fields
-      this._cookies = data.cookies;
-      this._session = data.session;
-      this._user    = data.user;
-
-      // Auto-fill stgru if server detected it
-      if (data.stgru) {
-        const stgruEl = this._q('stgru');
-        if (stgruEl) stgruEl.value = data.stgru;
+      if (data.requires_mfa) {
+        // IDP wants a TOTP — show MFA input
+        this._mfaStateId    = data.state_id;
+        this._mfaTokenField = data.token_field ?? '';
+        this._authPhase     = 'mfa';
+      } else {
+        this._fillSession(data);
       }
-
     } catch (e) {
       this._authError = `Netzwerkfehler: ${e.message}`;
-    } finally {
-      this._authLoading = false;
+      this._authPhase = 'idle';
     }
+  }
+
+  // ── Auto-login phase 2: submit TOTP ───────────────────────────
+  async _submitTotp() {
+    this._authError = '';
+    this._authPhase = 'loading';
+
+    const totp = this._q('totp')?.value.trim() ?? '';
+    if (!totp) {
+      this._authError = 'Bitte den Code eingeben.';
+      this._authPhase = 'mfa';
+      return;
+    }
+
+    try {
+      const res  = await fetch('/api/login/verify', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ state_id: this._mfaStateId, totp }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        this._authError = data.detail ?? `Fehler ${res.status}`;
+        this._authPhase = 'mfa';   // let them try the token again
+        return;
+      }
+
+      this._fillSession(data);
+    } catch (e) {
+      this._authError = `Netzwerkfehler: ${e.message}`;
+      this._authPhase = 'mfa';
+    }
+  }
+
+  _fillSession(data) {
+    this._cookies   = data.cookies;
+    this._session   = data.session;
+    this._user      = data.user;
+    this._authPhase = 'done';
+    if (data.stgru) {
+      const el = this._q('stgru');
+      if (el) el.value = data.stgru;
+    }
+  }
+
+  _resetAuth() {
+    this._authPhase    = 'idle';
+    this._authError    = '';
+    this._mfaStateId   = '';
+    this._mfaTokenField = '';
+    this._cookies = '';
+    this._session = '';
+    this._user    = '';
   }
 
   // ── Submit (fetch timetable) ───────────────────────────────────
   _submit() {
     this._fetchError = '';
 
-    // Resolve cookies/session/user from either auto-filled state or manual inputs
+    // Resolve cookies/session/user from auto-filled state or manual inputs
     const cookies = this._tab === 'auto'
       ? this._cookies
       : (this._q('cookies')?.value.trim() ?? '');
@@ -181,12 +237,17 @@ export class StepCredentials extends LitElement {
       ? this._user
       : (this._q('user')?.value.trim() ?? '');
 
-    const stgru    = this._q('stgru')?.value.trim()    ?? '';
-    const sem      = this._q('sem')?.value.trim()      || '9';
-    const dateFrom = this._q('date-from')?.value       ?? '';
-    const dateTo   = this._q('date-to')?.value         ?? '';
+    const stgru    = this._q('stgru')?.value.trim() ?? '';
+    const sem      = this._q('sem')?.value.trim()   || '9';
+    const dateFrom = this._q('date-from')?.value    ?? '';
+    const dateTo   = this._q('date-to')?.value      ?? '';
 
-    if (!cookies) { this._fetchError = 'Nicht eingeloggt. Bitte zuerst anmelden.'; return; }
+    if (!cookies) {
+      this._fetchError = this._tab === 'auto'
+        ? 'Bitte zuerst einloggen (oben).'
+        : 'Cookie-String fehlt.';
+      return;
+    }
     if (!session) { this._fetchError = 'Session fehlt.'; return; }
     if (!user)    { this._fetchError = 'User fehlt.'; return; }
     if (!stgru)   { this._fetchError = 'Studiengruppe (stgru) fehlt.'; return; }
@@ -202,24 +263,67 @@ export class StepCredentials extends LitElement {
 
   // ── Render helpers ─────────────────────────────────────────────
   _renderAutoTab() {
-    const loggedIn = !!this._cookies;
+    switch (this._authPhase) {
 
-    return html`
-      <div class="stack">
-        ${loggedIn ? html`
+      case 'done': return html`
+        <div class="stack">
           <div class="auth-ok">
             ✅ Eingeloggt als <strong>${this._user}</strong>
-            ${this._q('stgru')?.value ? '' : html`
-              — <span style="color:var(--text)">bitte noch stgru und Datum ausfüllen</span>
-            `}
           </div>
-        ` : html`
+          <button class="btn-ghost" style="align-self:flex-start"
+                  @click=${this._resetAuth}>
+            Anderes Konto verwenden
+          </button>
+        </div>`;
+
+      case 'mfa': return html`
+        <div class="stack">
+          <p class="hint">
+            ✅ Benutzername und Passwort korrekt.<br/>
+            Die Hochschule verlangt einen zweiten Faktor.
+          </p>
+          <div class="field">
+            <label>
+              Authenticator-Code
+              ${this._mfaTokenField ? html`
+                <span style="font-weight:400">(Feld: <code>${this._mfaTokenField}</code>)</span>
+              ` : ''}
+              <span class="required">*</span>
+            </label>
+            <input id="totp" type="text" inputmode="numeric"
+                   pattern="[0-9]*" maxlength="8"
+                   placeholder="123456"
+                   autocomplete="one-time-code"
+                   style="font-size:1.4rem;letter-spacing:.2em;text-align:center"
+                   @keydown=${e => e.key === 'Enter' && this._submitTotp()} />
+          </div>
+          <p class="hint" style="color:var(--error)">
+            ⏱ Codes sind nur ~30 Sekunden gültig — Code aus der App kopieren und sofort absenden.
+          </p>
+          ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
+          <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+            <button class="btn-primary" @click=${this._submitTotp}>
+              ${this._authPhase === 'loading'
+                ? html`<span class="spinner"></span> Prüfen…`
+                : 'Code bestätigen →'}
+            </button>
+            <button class="btn-ghost" @click=${this._resetAuth}>Abbrechen</button>
+          </div>
+        </div>`;
+
+      case 'loading': return html`
+        <div class="stack" style="align-items:center;padding:1rem 0">
+          <span class="spinner" style="width:28px;height:28px;border-width:3px"></span>
+          <p class="hint">Verbinde mit Hochschule…</p>
+        </div>`;
+
+      default: return html`  <!-- idle -->
+        <div class="stack">
           <p class="hint">
             Melde dich mit deinen HS-Landshut-Zugangsdaten an.
-            Das Passwort wird nur für diesen Login-Request verwendet und
-            <strong>nicht gespeichert</strong>.
+            Passwort und Token werden <strong>nicht gespeichert</strong> —
+            nur für diesen Login-Request verwendet.
           </p>
-
           <div class="row">
             <div class="field">
               <label>Benutzername <span class="required">*</span></label>
@@ -233,17 +337,12 @@ export class StepCredentials extends LitElement {
                      @keydown=${e => e.key === 'Enter' && this._autoLogin()} />
             </div>
           </div>
-
           ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
-
-          <button class="btn-primary" ?disabled=${this._authLoading} @click=${this._autoLogin}>
-            ${this._authLoading
-              ? html`<span class="spinner"></span> Einloggen…`
-              : '🔑 Einloggen'}
+          <button class="btn-primary" @click=${this._autoLogin}>
+            🔑 Einloggen
           </button>
-        `}
-      </div>
-    `;
+        </div>`;
+    }
   }
 
   _renderManualTab() {
