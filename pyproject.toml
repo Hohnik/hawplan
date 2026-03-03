@@ -1,0 +1,20 @@
+[project]
+name = "stundenplan-generator"
+version = "0.1.0"
+description = "Export your HS Landshut Primuss timetable to ICS"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.135",
+    "uvicorn[standard]>=0.41",
+    "httpx>=0.28",
+    "icalendar>=7.0",
+    "python-multipart>=0.0.22",
+]
+
+[project.scripts]
+serve = "run:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
