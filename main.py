@@ -16,8 +16,10 @@ from datetime import datetime, timedelta, timezone, date
 import re
 
 load_dotenv()
-_ENV_USERNAME = os.getenv("USERNAME", "")
-_ENV_PASSWORD = os.getenv("PASSWORD", "")
+_ENV_USERNAME    = os.getenv("USERNAME", "")
+_ENV_PASSWORD    = os.getenv("PASSWORD", "")
+_ENV_TOTP_SECRET = os.getenv("TOTP_SECRET", "")
+_ENV_STGRU       = os.getenv("STGRU", "")   # optional: skip course-group picker
 
 app = FastAPI()
 
@@ -259,8 +261,15 @@ async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
 
     session = (m.group(1) if (m := re.search(r"[?&]Session=([^&#]+)", final_url)) else "")
     user    = (m.group(1) if (m := re.search(r"[?&]User=([^&#]+)",    final_url)) else "")
-    stgru   = await detect_stgru(client, session, user, cookie_str)
-    return {"cookies": cookie_str, "session": session, "user": user, "stgru": stgru}
+    # The landing page already loaded above contains the full course-group menu;
+    # parse it from r_final (which is the Primuss start page after ACS redirect).
+    course_groups = await fetch_course_groups(client, session, user)
+    return {
+        "cookies":       cookie_str,
+        "session":       session,
+        "user":          user,
+        "course_groups": course_groups,   # [{label, stg, stgru}]
+    }
 
 
 async def shibboleth_phase1(username: str, password: str) -> dict:
@@ -332,13 +341,31 @@ async def shibboleth_phase1(username: str, password: str) -> dict:
                         status_code=502,
                         detail="MFA-Feld nicht erkannt. Bitte manuell einloggen.",
                     )
-                # Serialise cookie jar so phase-2 can restore it
+
+                # Auto-submit TOTP when secret is stored in .env
+                if _ENV_TOTP_SECRET:
+                    import pyotp
+                    totp_code = pyotp.TOTP(_ENV_TOTP_SECRET, digits=6, interval=30).now()
+                    fields = {
+                        k: v for k, v in fields.items()
+                        if not k.lower().startswith("_eventid_")
+                        or k.lower() == "_eventid_proceed"
+                    }
+                    fields[token_field] = totp_code
+                    r = await client.post(
+                        action, data=fields,
+                        headers={**BROWSER_HEADERS, "Referer": str(r.url),
+                                 "Content-Type": "application/x-www-form-urlencoded"},
+                    )
+                    continue   # let the loop process the next redirect/form
+
+                # No secret stored — ask the frontend for the code
                 cookie_dict = dict(client.cookies)
                 sid = _store_mfa_state(cookie_dict, action, fields, token_field)
                 return {
                     "requires_mfa": True,
                     "state_id":     sid,
-                    "token_field":  token_field,   # hints the UI (e.g. "j_tokenNumber")
+                    "token_field":  token_field,
                 }
 
             # ── Intermediate form: submit as-is ──────────────────────
@@ -397,15 +424,15 @@ async def shibboleth_phase2(state_id: str, totp: str) -> dict:
         return await _finish_saml(client, r)
 
 
-async def detect_stgru(
+async def fetch_course_groups(
     client: httpx.AsyncClient,
     session: str,
     user: str,
-    cookie_str: str,
-) -> str:
+) -> list[dict]:
     """
-    Best-effort: fetch the Primuss main page and extract stgru from the HTML/JS.
-    Returns "" if not found — user will need to enter it manually.
+    Parse the Primuss landing page and return all selectable course groups.
+    Each entry: {"label": "IF4", "stg": "11", "stgru": "161"}
+    The stgru value is the one needed for the timetable API.
     """
     try:
         r = await client.get(
@@ -414,19 +441,22 @@ async def detect_stgru(
             headers=BROWSER_HEADERS,
             timeout=10.0,
         )
-        # stgru appears in the page as e.g. stgru=165 or "stgru":"165" or value="165"
-        # Try several patterns
-        for pat in (
-            r'stgru["\s]*[:=]["\s]*(\d+)',
-            r'name=["\']stgru["\'][^>]*value=["\'](\d+)["\']',
-            r'value=["\'](\d+)["\'][^>]*name=["\']stgru["\']',
+        groups: list[dict] = []
+        # Menu entries look like:
+        #   <li onclick="STPL.Stgru.StgruSet(11, 161);">
+        #     <a class="menu_stgru_link" href="#">IF4</a>
+        for m in re.finditer(
+            r'StgruSet\((\d+),\s*(\d+)\)[^<]*<a[^>]+class="menu_stgru_link"[^>]*>([^<]+)</a>',
+            r.text,
         ):
-            m = re.search(pat, r.text, re.IGNORECASE)
-            if m:
-                return m.group(1)
+            groups.append({
+                "label": m.group(3).strip(),
+                "stg":   m.group(1),
+                "stgru": m.group(2),
+            })
+        return groups
     except Exception:
-        pass
-    return ""
+        return []
 
 
 # ── API Routes ────────────────────────────────────────────────────
@@ -497,10 +527,13 @@ async def _login_trace_impl(username: str, password: str) -> dict:
 
 @app.get("/api/auth-status")
 async def auth_status():
-    """Tell the frontend whether credentials are pre-loaded from .env."""
+    """Tell the frontend which .env settings are active."""
     return JSONResponse({
-        "configured": bool(_ENV_USERNAME and _ENV_PASSWORD),
-        "username":   _ENV_USERNAME,   # safe to expose — it's already in the URL
+        "configured":       bool(_ENV_USERNAME and _ENV_PASSWORD),
+        "totp_configured":  bool(_ENV_TOTP_SECRET),
+        "stgru_configured": bool(_ENV_STGRU),
+        "username":         _ENV_USERNAME,
+        "stgru":            _ENV_STGRU,
     })
 
 

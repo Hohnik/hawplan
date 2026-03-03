@@ -15,12 +15,17 @@ export class StepCredentials extends LitElement {
     _authError:    { state: true },
     _fetchError:   { state: true },
     _fetchLoading: { state: true },
-    _envConfigured:{ state: true },   // true when .env has USERNAME+PASSWORD
-    _envUsername:  { state: true },   // displayed in UI (not secret)
-    // filled by auto-login or typed manually
+    _envConfigured:    { state: true },   // true when .env has USERNAME+PASSWORD
+    _envTotp:          { state: true },   // true when .env has TOTP_SECRET too
+    _envStgru:         { state: true },   // pre-configured stgru → skip picker
+    _envUsername:      { state: true },
+    // session data (filled after login)
     _cookies:      { state: true },
     _session:      { state: true },
     _user:         { state: true },
+    // course group picker (phase = 'picking')
+    _courseGroups: { state: true },   // [{label, stg, stgru}]
+    _groupQuery:   { state: true },
     // MFA state
     _mfaStateId:    { state: true },
     _mfaTokenField: { state: true },
@@ -54,6 +59,25 @@ export class StepCredentials extends LitElement {
       color: var(--text);
     }
     .tab-btn:not(.active):hover { color: var(--text); }
+
+    /* ── Course group picker ────────────────────────────── */
+    .group-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 0.25rem 0;
+    }
+    .group-btn {
+      font-size: 0.82rem;
+      padding: 0.3rem 0.75rem;
+    }
+    .group-btn:hover {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
 
     /* ── Auth status banner ─────────────────────────────── */
     .auth-ok {
@@ -110,7 +134,11 @@ export class StepCredentials extends LitElement {
     this._fetchError    = '';
     this._fetchLoading  = false;
     this._envConfigured = false;
+    this._envTotp       = false;
+    this._envStgru      = '';
     this._envUsername   = '';
+    this._courseGroups  = [];
+    this._groupQuery    = '';
     this._cookies       = '';
     this._session       = '';
     this._user          = '';
@@ -127,8 +155,10 @@ export class StepCredentials extends LitElement {
     try {
       const res  = await fetch('/api/auth-status');
       const data = await res.json();
-      this._envConfigured = data.configured ?? false;
-      this._envUsername   = data.username   ?? '';
+      this._envConfigured = data.configured      ?? false;
+      this._envTotp       = data.totp_configured ?? false;
+      this._envStgru      = data.stgru           ?? '';
+      this._envUsername   = data.username        ?? '';
     } catch { /* server not ready yet — ignore */ }
   }
 
@@ -222,21 +252,37 @@ export class StepCredentials extends LitElement {
   }
 
   _fillSession(data) {
-    this._cookies   = data.cookies;
-    this._session   = data.session;
-    this._user      = data.user;
-    this._authPhase = 'done';
-    if (data.stgru) {
+    this._cookies      = data.cookies;
+    this._session      = data.session;
+    this._user         = data.user;
+    this._courseGroups = data.course_groups ?? [];
+
+    // Skip picker if stgru pre-configured in .env
+    if (this._envStgru) {
       const el = this._q('stgru');
-      if (el) el.value = data.stgru;
+      if (el) el.value = this._envStgru;
+      this._authPhase = 'done';
+      return;
     }
+    // Otherwise show the course group picker
+    this._authPhase = 'picking';
+  }
+
+  // Called when user selects a course group from the picker
+  _onPickGroup(stgru) {
+    // Fill the stgru input in the bottom form section
+    const el = this._q('stgru');
+    if (el) el.value = stgru;
+    this._authPhase = 'done';
   }
 
   _resetAuth() {
-    this._authPhase    = 'idle';
-    this._authError    = '';
-    this._mfaStateId   = '';
+    this._authPhase     = 'idle';
+    this._authError     = '';
+    this._mfaStateId    = '';
     this._mfaTokenField = '';
+    this._courseGroups  = [];
+    this._groupQuery    = '';
     this._cookies = '';
     this._session = '';
     this._user    = '';
@@ -331,6 +377,33 @@ export class StepCredentials extends LitElement {
           </div>
         </div>`;
 
+      case 'picking': {
+        const q = this._groupQuery.toLowerCase();
+        const filtered = q
+          ? this._courseGroups.filter(g => g.label.toLowerCase().includes(q))
+          : this._courseGroups;
+        return html`
+          <div class="stack">
+            <div class="auth-ok">✅ Eingeloggt als <strong>${this._user}</strong></div>
+            <p class="hint">Wähle deine Studiengruppe:</p>
+            <input type="search" placeholder="🔍 z.B. IF4, WIF, KI…"
+                   .value=${this._groupQuery}
+                   @input=${e => this._groupQuery = e.target.value}
+                   style="padding:.4rem .8rem;font-size:.85rem" />
+            <div class="group-list">
+              ${filtered.length
+                ? filtered.map(g => html`
+                    <button class="btn-chip group-btn"
+                            @click=${() => this._onPickGroup(g.stgru)}>
+                      ${g.label}
+                    </button>`)
+                : html`<p class="hint">Keine Treffer für „${this._groupQuery}"</p>`}
+            </div>
+            <button class="btn-ghost" style="align-self:flex-start"
+                    @click=${this._resetAuth}>← Neu einloggen</button>
+          </div>`;
+      }
+
       case 'loading': return html`
         <div class="stack" style="align-items:center;padding:1rem 0">
           <span class="spinner" style="width:28px;height:28px;border-width:3px"></span>
@@ -341,8 +414,12 @@ export class StepCredentials extends LitElement {
         ? html`  <!-- idle — .env credentials loaded -->
           <div class="stack">
             <div class="auth-ok" style="background:var(--accent-bg);border-color:var(--accent);color:var(--text)">
-              🔐 Zugangsdaten aus <code>.env</code> geladen
-              — Benutzer: <strong>${this._envUsername}</strong>
+              ${this._envTotp
+                ? html`🤖 Vollautomatisch — Benutzer: <strong>${this._envUsername}</strong>,
+                         Passwort + TOTP aus <code>.env</code>`
+                : html`🔐 Zugangsdaten aus <code>.env</code> — Benutzer: <strong>${this._envUsername}</strong>
+                         <br><small>TOTP-Code wird manuell abgefragt</small>`
+              }
             </div>
             ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
             <button class="btn-primary" @click=${this._autoLogin}>

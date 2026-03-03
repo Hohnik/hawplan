@@ -10,6 +10,8 @@ dependencies = [
     "httpx>=0.28",
     "icalendar>=7.0",
     "python-multipart>=0.0.22",
+    "python-dotenv>=1.0",
+    "pyotp>=2.9",
 ]
 
 [project.scripts]
