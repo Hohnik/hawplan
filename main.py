@@ -346,7 +346,12 @@ def _parse_course_groups(html: str) -> list[dict]:
         r'StgruSet\((\d+),\s*(\d+)\)[^<]*<a[^>]+class="menu_stgru_link"[^>]*>([^<]+)</a>',
         html,
     ):
-        groups.append({"label": m.group(3).strip(), "stg": m.group(1), "stgru": m.group(2)})
+        label = m.group(3).strip()
+        prog = re.match(r'[A-Za-z]+', label)
+        groups.append({
+            "label": label, "stg": m.group(1), "stgru": m.group(2),
+            "program": prog.group(0) if prog else label,
+        })
     return groups
 
 def normalize_event(raw) -> dict | None:

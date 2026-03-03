@@ -1,54 +1,62 @@
-/* ── Design tokens (pierce shadow DOM via CSS custom properties) ── */
+/* ── Design tokens ── */
 :root {
-  --bg:        #0f1117;
-  --surface:   #1a1d27;
-  --surface-2: #21263a;
-  --border:    #2a2d3e;
-  --border-2:  #373b55;
+  --bg:        #0d1017;
+  --surface:   #151b23;
+  --surface-2: #1c2333;
+  --border:    #2d3343;
+  --border-2:  #444d5e;
   --accent:    #6c8cff;
   --accent-h:  #8aabff;
-  --accent-bg: rgba(108, 140, 255, 0.12);
-  --text:      #e2e4f0;
-  --muted:     #8b8fa8;
-  --error:     #ff6b6b;
-  --error-bg:  rgba(255, 107, 107, 0.1);
-  --error-bdr: rgba(255, 107, 107, 0.28);
+  --accent-bg: rgba(108, 140, 255, 0.10);
+  --text:      #e6edf3;
+  --muted:     #919bab;
+  --error:     #f85149;
+  --error-bg:  rgba(248, 81, 73, 0.10);
+  --error-bdr: rgba(248, 81, 73, 0.35);
   --success:   #56d364;
-  --radius:    12px;
-  --radius-sm: 8px;
-  --font:      'Segoe UI', system-ui, -apple-system, sans-serif;
-  --mono:      'SF Mono', 'Fira Code', 'Courier New', monospace;
+  --radius:    10px;
+  --radius-sm: 7px;
+  --font:      -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --mono:      'SF Mono', 'Fira Code', ui-monospace, monospace;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html  { font-size: 16px; }
-body  {
+
+body {
   font-family: var(--font);
+  font-size: 15px;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 2.5rem 1rem 5rem;
-  line-height: 1.5;
+  padding: 2rem 1rem 4rem;
+  line-height: 1.55;
 }
 
-header    { text-align: center; margin-bottom: 2.5rem; }
-header h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }
-header p  { color: var(--muted); margin-top: 0.3rem; font-size: 0.9rem; }
+header    { text-align: center; margin-bottom: 1.5rem; }
+header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.3px; }
+header p  { color: var(--muted); margin-top: 0.15rem; font-size: 0.85rem; }
 
 footer {
-  margin-top: 3rem;
+  margin-top: 2.5rem;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   text-align: center;
+  opacity: 0.6;
 }
 
 app-shell {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
   width: 100%;
-  max-width: 720px;
+  max-width: 660px;
+}
+
+@media (max-width: 500px) {
+  body { padding: 1rem 0.65rem 3rem; }
+  header { margin-bottom: 1rem; }
+  header h1 { font-size: 1.3rem; }
 }

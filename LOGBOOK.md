@@ -1,5 +1,27 @@
 # Logbook
 
+## 2026-03-03 — Faculty grouping, full names, design polish
+
+**Faculty/program accordion:** Replaced flat chip list ("… 108 weitere") with an accordion grouped by program prefix (IF, WIF, KI, etc.). Each program row is expandable; shows group count and how many are loaded. Search auto-expands all matching programs. Eliminates the 50-item cutoff entirely — all 160 groups accessible via ~20 collapsed program rows.
+
+**Full course names:** Course cards now show `fach_name` (e.g. "Internet of Things") as the primary display name, with `fach_kurzform` (e.g. "IoT") as a small tag. The `_groupEvents()` method also fills `fullName` from any event in the group (not just the first). Week grid keeps short codes as labels (space-limited) but shows full names in hover tooltips.
+
+**Default to no selection:** Removed auto-select on group load. Users now opt-in to each course. The calendar starts empty — cleaner initial state, forces intentional choices.
+
+**Design polish (global.css + shared-styles.js):**
+- `--muted` brightened (`#8b8fa8` → `#919bab`) for better contrast on dark surfaces (now ~5.4:1 on surface)
+- `--border` brightened (`#2a2d3e` → `#2d3343`) for more visible structure
+- `--surface` darkened slightly (`#1a1d27` → `#151b23`) for better card/bg separation
+- Card padding tightened (`1.75rem 2rem` → `1.15rem 1.35rem`) — less wasted space
+- Header reduced (h1 `2rem` → `1.5rem`) — less vertical consumption
+- Button padding refined, input sizing consistent
+- Added mobile media query for `<500px` screens
+- System font stack simplified to `-apple-system, BlinkMacSystemFont, 'Segoe UI'`
+
+**Code reduction:** `timetable-view.js` rewritten from 488 → ~300 lines. Removed info tooltip (replaced by inline full name display), simplified done state, replaced `hashColor` → `colorOf`, `_buildCourses` → `_groupEvents`. Checkbox uses `pointer-events: none` (purely visual indicator, div handles click).
+
+**Backend:** Added `program` field to course groups — extracted from label prefix via `re.match(r'[A-Za-z]+', label)`. Frontend uses this for accordion grouping.
+
 ## 2026-03-03 — Course grouping, multi-group, week preview, session cache
 
 **Course grouping:** Events are now grouped by `summary` into courses. For IF4, 341 individual events → 14 courses. Each course card shows all time slots (e.g. "Mo 08:45–10:15 | Di 14:30–16:00"), lecturer, rooms, and occurrence count (e.g. "30×"). Users select/deselect entire courses, not individual events.
