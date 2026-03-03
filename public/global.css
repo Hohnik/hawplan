@@ -21,10 +21,8 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html { font-size: 16px; scroll-behavior: smooth; }
-
-body {
+html  { font-size: 16px; }
+body  {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
@@ -36,20 +34,9 @@ body {
   line-height: 1.5;
 }
 
-header {
-  text-align: center;
-  margin-bottom: 2.5rem;
-}
-header h1 {
-  font-size: 2rem;
-  font-weight: 700;
-  letter-spacing: -0.5px;
-}
-header p {
-  color: var(--muted);
-  margin-top: 0.3rem;
-  font-size: 0.9rem;
-}
+header    { text-align: center; margin-bottom: 2.5rem; }
+header h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }
+header p  { color: var(--muted); margin-top: 0.3rem; font-size: 0.9rem; }
 
 footer {
   margin-top: 3rem;
@@ -58,7 +45,6 @@ footer {
   text-align: center;
 }
 
-/* host the main card stack */
 app-shell {
   display: flex;
   flex-direction: column;

@@ -1,42 +1,68 @@
-# Stundenplan Generator — HS Landshut
+# Stundenplan Generator
 
-Export your Primuss timetable to a `.ics` file that you can import into any calendar app.
+Export your **HS Landshut** Primuss timetable as an `.ics` calendar file.
 
-## Run
+## Quick Start
 
 ```bash
+# 1. Clone & setup
+git clone <repo>
+cd stundenplan_generator
+uv sync
+
+# 2. Configure credentials
+cp .env.example .env
+# Edit .env with your HS Landshut credentials
+
+# 3. Run
 uv run python run.py
-# → opens on http://localhost:8000
+# Open http://localhost:8000
 ```
 
-## How it works
+## `.env` Configuration
 
-1. You log in to Primuss normally in your browser
-2. You copy three things from DevTools (F12 → Network):
-   - The `Cookie:` header value (`PHPSESSID=…; _shibsession_…=…`)
-   - `Session=…` and `User=…` from the URL bar
-   - `stgru=…` from the POST payload of any calendar request
-3. You pick a semester date range
-4. The app fires a POST to `method=list` for **every week** in that range  
-   (concurrency-limited to 3 parallel requests, so Primuss doesn't get hammered)
-5. All events are deduplicated, sorted, and displayed as checkboxes
-6. You pick what you want → download `.ics`
+```env
+USERNAME=s-mustermann       # HS Landshut username
+PASSWORD=your_password      # HS Landshut password
+TOTP_SECRET=ABC123...       # TOTP secret (from otpauth:// link) — optional but recommended
+STGRU=165                   # Study group ID — optional (skip group picker)
+```
 
-## Technical overview
+With all four values set, the login is **fully automatic** — one click.
+
+## How It Works
+
+1. **🚀 Einloggen** — Authenticates via Shibboleth SSO (credentials + TOTP from `.env`)
+2. **📚 Studiengruppe wählen** — Pick your group from a searchable list (e.g. `IF4`)
+3. **📅 ICS herunterladen** — Review events, deselect unwanted ones, download `.ics`
+
+## Tech Stack
+
+- **Backend:** Python 3.13 + FastAPI + httpx + pyotp + icalendar
+- **Frontend:** Lit web components (CDN, no build step)
+- **Auth:** Automated Shibboleth SSO with Fudis MFA support
+
+## Project Structure
 
 ```
-main.py          FastAPI app
-  POST /api/fetch-all    → iterates weeks, normalizes events
-  POST /api/generate-ics → builds iCalendar file
-  GET  /                 → serves public/
-
+main.py              # All backend logic (~350 lines)
+run.py               # uvicorn launcher
 public/
-  index.html   3-step UI
-  style.css    Dark theme
-  app.js       Fetch + ICS download logic
+  index.html         # Minimal HTML shell
+  global.css         # Design tokens
+  js/
+    app-shell.js     # View router + API calls
+    login-view.js    # Login + group picker
+    timetable-view.js # Event list + ICS download
+    shared-styles.js  # Shared Lit CSS
 ```
 
-## Why not just automate the login?
+## API Endpoints
 
-Primuss uses **Shibboleth SSO** (SAML2 federated login via the university IDP).  
-Replicating that flow requires handling SAML assertions, signed XML, and the university's IDP endpoint — way more complexity than just copying two cookies that are valid for your whole browser session.
+| Method | Path             | Description                          |
+|--------|------------------|--------------------------------------|
+| GET    | `/api/status`    | Check `.env` configuration           |
+| POST   | `/api/login`     | Shibboleth SSO login (phase 1)       |
+| POST   | `/api/login/mfa` | Submit TOTP code (phase 2)           |
+| POST   | `/api/timetable` | Fetch all events for current semester |
+| POST   | `/api/ics`       | Generate `.ics` calendar file        |

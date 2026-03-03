@@ -1,5 +1,30 @@
 # Logbook
 
+## 2026-03-03 — Full refactor
+
+**Complete rewrite** of backend and frontend for readability, reduced size, and better UX.
+
+**Backend (`main.py` — ~350 lines, down from ~800):**
+- Rewrote `normalize_event()` for actual Primuss list format: `[idx, text, start, end, ..., meta_dict, ..., room]`
+- Replaced `extract_items()` with simple `data.get("events", [])` — no more generic dict-key guessing
+- Removed `date_from`/`date_to` from request — auto-calculates via `current_semester()`
+- Cleaned API routes: `/api/status`, `/api/login`, `/api/login/mfa`, `/api/timetable`, `/api/ics`
+- Removed trace endpoint (debug-only, not needed in production)
+- Renamed all internal helpers for clarity (`FormExtractor` → `FormParser`, `_mfa_store` helpers, etc.)
+
+**Frontend (4 files, down from 6):**
+- `login-view.js` — replaces `step-credentials.js`: login + group picker in one component, no manual cookie tab
+- `timetable-view.js` — replaces `step-events.js` + `step-done.js`: event list + download + done state inline
+- `app-shell.js` — simplified routing: `'login'` → `'timetable'`
+- Deleted: `step-credentials.js`, `step-events.js`, `step-done.js`, `style.css`, `app.js`
+
+**UX flow (3 clicks):**
+1. Click **🚀 Einloggen** (credentials + TOTP from `.env`)
+2. Click study group from searchable grid (e.g. `IF4`)
+3. Review events → click **📅 ICS herunterladen**
+
+**Verified live:** login → auto-TOTP → 160 groups → 341 events/week parsed correctly with room + lecturer.
+
 ## 2026-03-03 — .env credentials + trace-based diagnosis
 
 **Root cause confirmed via trace:** credentials in `.env` were rejected by the IDP (same login form returned at e1s2 instead of advancing to MFA). Not a code issue — IDP is reporting wrong username/password.

@@ -1,19 +1,16 @@
 # TODO
 
-## Blocking
-- [ ] **Verify Primuss JSON shape** — capture a real `/api/fetch-all` response. The debug panel in step-events will show the raw items if field names don't match. Adjust `normalize_event()` accordingly.
-- [ ] **Test ICS import** — validate the generated `.ics` in Google Calendar and Apple Calendar once real event data is available.
-- [x] **Cookie newline bug** — fixed: `parse_cookies` now strips `\r\n` line-wrapping inserted by DevTools when copying long cookie names.
-- [x] **Auto-login** — Shibboleth SSO flow automated via `FormExtractor` + `/api/login`.
+## Done
+- [x] Shibboleth SSO auto-login (username + password + TOTP)
+- [x] Course group picker (160 groups from Primuss)
+- [x] Primuss event parsing (list format with metadata dict)
+- [x] ICS generation with stable UIDs
+- [x] Auto-detect current semester dates
+- [x] .env credentials (USERNAME, PASSWORD, TOTP_SECRET, STGRU)
+- [x] Full codebase refactor (clean naming, reduced files, better UX)
 
-## Enhancements
-- [~] **Auto-detect stgru** — `detect_stgru()` implemented; needs real-world test to confirm the regex matches Primuss's actual HTML/JS output.
-- [ ] **Persist form values** — save cookies/session/stgru to `sessionStorage` so a page reload doesn't wipe everything.
-- [ ] **Recurring events** — if Primuss returns repeating lectures (same name, same time, different dates), collapse them into `RRULE` in the ICS instead of individual events.
-- [ ] **Error recovery per week** — currently a timeout on one week is silently skipped; surface a warning in the UI showing which weeks failed.
-- [ ] **CORS hardening** — restrict `CORSMiddleware` to `localhost` only (not `*`) since the backend is only meant to run locally.
-
-## Nice to have
-- [ ] Dark/light theme toggle
-- [ ] Show a per-week progress indicator while loading (SSE or polling)
-- [ ] Export to `.csv` as alternative to ICS
+## Future Ideas
+- [ ] Remember last-used study group in localStorage
+- [ ] Light theme toggle
+- [ ] Show semester week calendar view (visual)
+- [ ] Support multiple study groups in one export
