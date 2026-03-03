@@ -10,18 +10,20 @@ import { base } from './shared-styles.js';
  */
 export class StepCredentials extends LitElement {
   static properties = {
-    _tab:         { state: true },   // 'auto' | 'manual'
-    _authPhase:   { state: true },   // 'idle' | 'loading' | 'mfa' | 'done'
-    _authError:   { state: true },
-    _fetchError:  { state: true },
-    _fetchLoading:{ state: true },
-    // filled by auto-login, or typed manually
-    _cookies:    { state: true },
-    _session:    { state: true },
-    _user:       { state: true },
+    _tab:          { state: true },   // 'auto' | 'manual'
+    _authPhase:    { state: true },   // 'idle' | 'loading' | 'mfa' | 'done'
+    _authError:    { state: true },
+    _fetchError:   { state: true },
+    _fetchLoading: { state: true },
+    _envConfigured:{ state: true },   // true when .env has USERNAME+PASSWORD
+    _envUsername:  { state: true },   // displayed in UI (not secret)
+    // filled by auto-login or typed manually
+    _cookies:      { state: true },
+    _session:      { state: true },
+    _user:         { state: true },
     // MFA state
-    _mfaStateId:   { state: true },
-    _mfaTokenField:{ state: true },  // actual field name from IDP (for the hint)
+    _mfaStateId:    { state: true },
+    _mfaTokenField: { state: true },
   };
 
   static styles = [base, css`
@@ -102,19 +104,35 @@ export class StepCredentials extends LitElement {
 
   constructor() {
     super();
-    this._tab          = 'auto';
-    this._authPhase    = 'idle';   // 'idle' | 'loading' | 'mfa' | 'done'
-    this._authError    = '';
-    this._fetchError   = '';
-    this._fetchLoading = false;
-    this._cookies      = '';
-    this._session      = '';
-    this._user         = '';
+    this._tab           = 'auto';
+    this._authPhase     = 'idle';
+    this._authError     = '';
+    this._fetchError    = '';
+    this._fetchLoading  = false;
+    this._envConfigured = false;
+    this._envUsername   = '';
+    this._cookies       = '';
+    this._session       = '';
+    this._user          = '';
     this._mfaStateId    = '';
     this._mfaTokenField = '';
   }
 
-  // ── called by app-shell ───────────────────────────────────────────────
+  connectedCallback() {
+    super.connectedCallback();
+    this._checkEnv();
+  }
+
+  async _checkEnv() {
+    try {
+      const res  = await fetch('/api/auth-status');
+      const data = await res.json();
+      this._envConfigured = data.configured ?? false;
+      this._envUsername   = data.username   ?? '';
+    } catch { /* server not ready yet — ignore */ }
+  }
+
+  // ── called by app-shell ────────────────────────────────────────────
   setLoading(v) { this._fetchLoading = v; }
   set _error(v)  { this._fetchError = v; }
 
@@ -126,15 +144,16 @@ export class StepCredentials extends LitElement {
 
   _q(id) { return this.shadowRoot.getElementById(id); }
 
-  // ── Auto-login phase 1: username + password ───────────────────
+  // ── Auto-login phase 1 ────────────────────────────────────────
   async _autoLogin() {
     this._authError = '';
     this._authPhase = 'loading';
 
-    const username = this._q('username')?.value.trim() ?? '';
-    const password = this._q('password')?.value.trim() ?? '';
+    // Use manual fields only when .env is not configured
+    const username = this._envConfigured ? '' : (this._q('username')?.value.trim() ?? '');
+    const password = this._envConfigured ? '' : (this._q('password')?.value.trim() ?? '');
 
-    if (!username || !password) {
+    if (!this._envConfigured && (!username || !password)) {
       this._authError = 'Benutzername und Passwort sind erforderlich.';
       this._authPhase = 'idle';
       return;
@@ -318,31 +337,42 @@ export class StepCredentials extends LitElement {
           <p class="hint">Verbinde mit Hochschule…</p>
         </div>`;
 
-      default: return html`  <!-- idle -->
-        <div class="stack">
-          <p class="hint">
-            Melde dich mit deinen HS-Landshut-Zugangsdaten an.
-            Passwort und Token werden <strong>nicht gespeichert</strong> —
-            nur für diesen Login-Request verwendet.
-          </p>
-          <div class="row">
-            <div class="field">
-              <label>Benutzername <span class="required">*</span></label>
-              <input id="username" type="text" placeholder="s-nhohnn"
-                     autocomplete="username" />
+      default: return this._envConfigured
+        ? html`  <!-- idle — .env credentials loaded -->
+          <div class="stack">
+            <div class="auth-ok" style="background:var(--accent-bg);border-color:var(--accent);color:var(--text)">
+              🔐 Zugangsdaten aus <code>.env</code> geladen
+              — Benutzer: <strong>${this._envUsername}</strong>
             </div>
-            <div class="field">
-              <label>Passwort <span class="required">*</span></label>
-              <input id="password" type="password" placeholder="••••••••"
-                     autocomplete="current-password"
-                     @keydown=${e => e.key === 'Enter' && this._autoLogin()} />
+            ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
+            <button class="btn-primary" @click=${this._autoLogin}>
+              🚀 Einloggen
+            </button>
+          </div>`
+        : html`  <!-- idle — manual credentials -->
+          <div class="stack">
+            <p class="hint">
+              Melde dich mit deinen HS-Landshut-Zugangsdaten an.
+              Passwort wird <strong>nicht gespeichert</strong>.
+            </p>
+            <div class="row">
+              <div class="field">
+                <label>Benutzername <span class="required">*</span></label>
+                <input id="username" type="text" placeholder="s-nhohnn"
+                       autocomplete="username" />
+              </div>
+              <div class="field">
+                <label>Passwort <span class="required">*</span></label>
+                <input id="password" type="password" placeholder="••••••••"
+                       autocomplete="current-password"
+                       @keydown=${e => e.key === 'Enter' && this._autoLogin()} />
+              </div>
             </div>
-          </div>
-          ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
-          <button class="btn-primary" @click=${this._autoLogin}>
-            🔑 Einloggen
-          </button>
-        </div>`;
+            ${this._authError ? html`<p class="error-msg">❌ ${this._authError}</p>` : ''}
+            <button class="btn-primary" @click=${this._autoLogin}>
+              🔑 Einloggen
+            </button>
+          </div>`;
     }
   }
 

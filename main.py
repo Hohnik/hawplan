@@ -5,13 +5,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from html.parser import HTMLParser
 from urllib.parse import urljoin
+from dotenv import load_dotenv
 import httpx
 import asyncio
 import uuid
+import os
 from io import BytesIO
 from icalendar import Calendar, Event, vText
 from datetime import datetime, timedelta, timezone, date
 import re
+
+load_dotenv()
+_ENV_USERNAME = os.getenv("USERNAME", "")
+_ENV_PASSWORD = os.getenv("PASSWORD", "")
 
 app = FastAPI()
 
@@ -35,8 +41,9 @@ BROWSER_HEADERS = {
 # ── Models ───────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    # Optional: if omitted, falls back to USERNAME/PASSWORD from .env
+    username: str = ""
+    password: str = ""
 
 class MfaRequest(BaseModel):
     state_id: str
@@ -414,17 +421,13 @@ async def detect_stgru(
 
 # ── API Routes ────────────────────────────────────────────────────
 
-@app.post("/api/login/trace")
-async def login_trace(req: LoginRequest):
+async def _login_trace_impl(username: str, password: str) -> dict:
     """
-    Diagnostic endpoint: walks the Shibboleth flow with real credentials and
-    returns a step-by-step trace (URLs, form field names, classification).
-    NEVER returns secrets/values — only field names and URLs.
-    Useful for debugging unexpected IDP form structures.
+    Walk the Shibboleth flow step by step.
+    Returns a trace dict with URL, form field names, and classification per step.
+    Never includes secret values — field names only.
     """
-    steps = []
-    _USERNAME_K = _USERNAME_KEYS
-    _PASSWORD_K = _PASSWORD_KEYS
+    steps: list[dict] = []
 
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=30.0, headers=BROWSER_HEADERS,
@@ -435,9 +438,9 @@ async def login_trace(req: LoginRequest):
         credentials_sent = False
 
         for step_n in range(8):
-            forms  = FormExtractor.parse(r.text)
-            title  = re.search(r"<title[^>]*>([^<]+)", r.text)
-            step_info = {
+            forms = FormExtractor.parse(r.text)
+            title = re.search(r"<title[^>]*>([^<]+)", r.text)
+            info  = {
                 "step":           step_n + 1,
                 "url":            str(r.url),
                 "page_title":     title.group(1).strip() if title else "",
@@ -448,9 +451,7 @@ async def login_trace(req: LoginRequest):
             }
 
             if not forms:
-                step_info["classification"] = "no_form"
-                steps.append(step_info)
-                break
+                info["classification"] = "no_form"; steps.append(info); break
 
             fields = dict(forms[0]["fields"])
             action = forms[0]["action"]
@@ -458,58 +459,75 @@ async def login_trace(req: LoginRequest):
                 action = urljoin(str(r.url), action)
 
             if "SAMLResponse" in fields:
-                step_info["classification"] = "saml_response"
-                steps.append(step_info)
-                break
+                info["classification"] = "saml_response"; steps.append(info); break
             elif _is_login_form(fields):
-                step_info["classification"] = "login_form"
-                steps.append(step_info)
+                info["classification"] = "login_form"; steps.append(info)
                 if not credentials_sent:
-                    fields[_find_field(fields, _USERNAME_K) or "j_username"] = req.username
-                    fields[_find_field(fields, _PASSWORD_K) or "j_password"] = req.password
+                    fields[_find_field(fields, _USERNAME_KEYS) or "j_username"] = username
+                    fields[_find_field(fields, _PASSWORD_KEYS) or "j_password"] = password
                     credentials_sent = True
-                    r = await client.post(action, data=fields,
-                        headers={**BROWSER_HEADERS, "Referer": str(r.url),
-                                 "Content-Type": "application/x-www-form-urlencoded"})
+                    r = await client.post(action, data=fields, headers={
+                        **BROWSER_HEADERS, "Referer": str(r.url),
+                        "Content-Type": "application/x-www-form-urlencoded"})
                     continue
                 else:
-                    step_info["classification"] = "login_form_again__wrong_credentials"
-                    break
+                    info["classification"] = "login_form_again__wrong_credentials"; break
             elif credentials_sent and _is_mfa_form(fields):
-                tok = _guess_token_field(fields)
-                step_info["classification"] = "mfa_form"
-                step_info["token_field"]    = tok
-                steps.append(step_info)
-                break
+                info["classification"] = "mfa_form"
+                info["token_field"]    = _guess_token_field(fields)
+                steps.append(info); break
             else:
-                step_info["classification"] = "intermediate_form"
-                steps.append(step_info)
-                r = await client.post(action, data=fields,
-                    headers={**BROWSER_HEADERS, "Referer": str(r.url),
-                             "Content-Type": "application/x-www-form-urlencoded"})
-                continue
+                info["classification"] = "intermediate_form"; steps.append(info)
+                r = await client.post(action, data=fields, headers={
+                    **BROWSER_HEADERS, "Referer": str(r.url),
+                    "Content-Type": "application/x-www-form-urlencoded"})
 
-    return JSONResponse({"trace": steps})
+    return {"trace": steps}
+
+
+@app.get("/api/auth-status")
+async def auth_status():
+    """Tell the frontend whether credentials are pre-loaded from .env."""
+    return JSONResponse({
+        "configured": bool(_ENV_USERNAME and _ENV_PASSWORD),
+        "username":   _ENV_USERNAME,   # safe to expose — it's already in the URL
+    })
 
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
     """
     Phase 1 of Shibboleth SSO login.
+    Credentials fall back to .env USERNAME / PASSWORD when not supplied.
     Returns either:
-      { cookies, session, user, stgru }           — login complete (no MFA)
+      { cookies, session, user, stgru }             — login complete (no MFA)
       { requires_mfa: true, state_id, token_field } — MFA step required
     """
-    return JSONResponse(await shibboleth_phase1(req.username, req.password))
+    username = req.username or _ENV_USERNAME
+    password = req.password or _ENV_PASSWORD
+    if not username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Keine Zugangsdaten. Bitte .env mit USERNAME und PASSWORD anlegen "
+                   "oder Benutzername/Passwort eingeben.",
+        )
+    return JSONResponse(await shibboleth_phase1(username, password))
 
 
 @app.post("/api/login/verify")
 async def login_verify(req: MfaRequest):
-    """
-    Phase 2: submit the TOTP token to complete the MFA step.
-    Returns { cookies, session, user, stgru }.
-    """
+    """Phase 2: submit the TOTP token. Returns { cookies, session, user, stgru }."""
     return JSONResponse(await shibboleth_phase2(req.state_id, req.totp))
+
+
+@app.post("/api/login/trace")
+async def login_trace(req: LoginRequest):
+    """Diagnostic trace — falls back to .env credentials when body is empty."""
+    username = req.username or _ENV_USERNAME
+    password = req.password or _ENV_PASSWORD
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Keine Zugangsdaten für Trace.")
+    return JSONResponse(await _login_trace_impl(username, password))
 
 
 @app.post("/api/fetch-all")
