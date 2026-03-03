@@ -1,4 +1,4 @@
-import { css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+import { css } from 'https://esm.sh/lit@3';
 
 /**
  * Shared Lit CSS — imported via `static styles = [shared, css`…`]`.
