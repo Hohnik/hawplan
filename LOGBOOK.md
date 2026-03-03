@@ -1,5 +1,18 @@
 # Logbook
 
+## 2026-03-03 — .env credentials + trace-based diagnosis
+
+**Root cause confirmed via trace:** credentials in `.env` were rejected by the IDP (same login form returned at e1s2 instead of advancing to MFA). Not a code issue — IDP is reporting wrong username/password.
+
+**Changes:**
+- `load_dotenv()` on startup; `_ENV_USERNAME`/`_ENV_PASSWORD` used as fallback in all login endpoints.
+- `LoginRequest` fields now optional — fall back to env vars when empty.
+- `GET /api/auth-status` tells frontend whether `.env` is configured and which username is loaded.
+- `POST /api/login/trace` also uses env fallback — run `curl -X POST http://localhost:8000/api/login/trace -H "Content-Type: application/json" -d '{}'` to diagnose.
+- `_login_trace_impl()` extracted as shared helper (was duplicated).
+- `step-credentials`: when env is configured shows a single 🚀 button instead of username/password form.
+- `.env` added to `.gitignore`.
+
 ## 2026-03-03 — Auto-login + cookie bug fixes
 
 **Bugs fixed:**
