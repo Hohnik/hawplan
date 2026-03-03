@@ -1,5 +1,17 @@
 # Logbook
 
+## 2026-03-03 — Course grouping, multi-group, week preview, session cache
+
+**Course grouping:** Events are now grouped by `summary` into courses. For IF4, 341 individual events → 14 courses. Each course card shows all time slots (e.g. "Mo 08:45–10:15 | Di 14:30–16:00"), lecturer, rooms, and occurrence count (e.g. "30×"). Users select/deselect entire courses, not individual events.
+
+**Multi-group selection:** Users can load courses from multiple study groups simultaneously. Click a group chip (e.g. IF4) to load its courses, click another (e.g. KI2) to add more. Each group's courses are listed separately with Alle/Keine toggles. Loaded groups shown as removable chips with ✕.
+
+**Week preview grid:** New `<week-grid>` component renders a visual weekly timetable (Mon–Fri, 08:00–20:00) using CSS grid with 48 quarter-hour rows. Selected courses appear as colored blocks (deterministic color per course via name hash). Rooms shown on larger blocks, hover for full details.
+
+**Session cache (30-min TTL):** `GET /api/session` returns cached login data. On page refresh, app-shell checks for cached session and skips login entirely if valid. Invalidated on 401 from timetable endpoint. Eliminates ~5s Shibboleth login on every page load.
+
+**Login-view simplified:** Group picker removed (now in timetable-view). Login-view just handles auth and emits `login-success` with session + course groups.
+
 ## 2026-03-03 — Full refactor
 
 **Complete rewrite** of backend and frontend for readability, reduced size, and better UX.
