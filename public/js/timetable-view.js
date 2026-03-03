@@ -1,218 +1,447 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 import { shared } from './shared-styles.js';
+import './week-grid.js';
+
+/* ── Color palette for courses ─────────────────────── */
+const COLORS = [
+  '#6c8cff','#ff6b9d','#56d364','#f0c541','#c084fc',
+  '#fb923c','#22d3ee','#f87171','#a3e635','#e879f9',
+  '#2dd4bf','#fbbf24','#818cf8','#fb7185','#34d399',
+];
+function hashColor(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  return COLORS[Math.abs(h) % COLORS.length];
+}
+
+const DAY_SHORT = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 
 /**
  * <timetable-view>
- * Shows fetched events, lets the user filter/select, then download as .ics.
- * Includes the "done" state inline after a successful download.
+ * Full timetable builder: pick study groups → toggle courses → preview → download.
  *
- * Props (set by app-shell): events, weeks, semester, groupLabel
- * Emits: 'download-ics' { detail: { events } }, 'restart'
+ * Props: .session  { cookies, session, user }
+ *        .courseGroups  [{ label, stg, stgru }]
+ *
+ * Emits: 'session-expired', 'restart'
  */
 export class TimetableView extends LitElement {
   static properties = {
-    events:     { type: Array  },
-    weeks:      { type: Number },
-    semester:   { type: String },
-    groupLabel: { type: String },
+    session:       { type: Object },
+    courseGroups:   { type: Array },
 
-    _query:     { state: true },
-    _selected:  { state: true },  // Set<index>
-    _loading:   { state: true },
-    _error:     { state: true },
-    _done:      { state: true },  // true after download
+    _groupQuery:   { state: true },
+    _loaded:       { state: true },    // Map<stgru, { label, courses[] }>
+    _loadingStgru: { state: true },    // stgru currently loading, or null
+    _selected:     { state: true },    // Set<courseId>
+    _error:        { state: true },
+    _downloading:  { state: true },
+    _done:         { state: true },
   };
 
   static styles = [shared, css`
-    .toolbar {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    /* ── Group chips ──────────────────────── */
+    .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; max-height: 200px; overflow-y: auto; }
+    .chip {
+      padding: 0.28rem 0.65rem; font-size: 0.74rem; border-radius: 99px;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--muted); cursor: pointer; transition: all 0.15s;
+      display: inline-flex; align-items: center; gap: 0.25rem;
     }
-    input[type='search'] {
-      flex: 1; min-width: 160px; padding: 0.38rem 0.8rem; font-size: 0.82rem;
+    .chip:hover { border-color: var(--accent); color: var(--text); }
+    .chip.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .chip .x { font-size: 0.6rem; opacity: 0.5; margin-left: 2px; }
+    .chip .x:hover { opacity: 1; }
+    .chip.loading { opacity: 0.5; pointer-events: none; }
+
+    /* ── Course list ──────────────────────── */
+    .course-list {
+      display: flex; flex-direction: column; gap: 0.35rem;
+      max-height: 340px; overflow-y: auto; padding-right: 4px;
+    }
+    .course-list::-webkit-scrollbar { width: 4px; }
+    .course-list::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+
+    .group-hdr {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.76rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+      margin-top: 0.5rem; padding-bottom: 0.15rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .group-hdr button { font-size: 0.66rem; text-transform: none; letter-spacing: 0; padding: 0.2rem 0.55rem; }
+
+    .course {
+      display: flex; align-items: flex-start; gap: 0.6rem;
+      padding: 0.55rem 0.8rem; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 8px;
+      cursor: pointer; transition: border-color 0.14s; user-select: none;
+    }
+    .course:hover { border-color: var(--border-2); }
+    .course.on { border-color: var(--accent); background: var(--accent-bg); }
+    .course input[type='checkbox'] { margin-top: 3px; accent-color: var(--accent); cursor: pointer; width: auto; }
+
+    .color-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      flex-shrink: 0; margin-top: 5px;
+    }
+    .c-name { font-weight: 600; font-size: 0.84rem; }
+    .c-meta { color: var(--muted); font-size: 0.72rem; margin-top: 1px; line-height: 1.5; }
+    .c-count { margin-left: auto; font-size: 0.7rem; color: var(--muted); white-space: nowrap; padding-top: 2px; }
+
+    /* ── Preview label ────────────────────── */
+    .section-label {
+      font-size: 0.76rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
     }
 
-    .event-list {
-      display: flex; flex-direction: column; gap: 0.4rem;
-      max-height: 420px; overflow-y: auto; padding-right: 0.15rem;
-    }
-    .event-list::-webkit-scrollbar       { width: 4px; }
-    .event-list::-webkit-scrollbar-track  { background: transparent; }
-    .event-list::-webkit-scrollbar-thumb  { background: var(--border-2); border-radius: 99px; }
+    /* ── Footer ───────────────────────────── */
+    .footer { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    .stats { font-size: 0.8rem; color: var(--muted); margin-left: auto; }
 
-    .ev {
-      display: flex; align-items: flex-start; gap: 0.75rem;
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: var(--radius-sm); padding: 0.7rem 0.95rem;
-      cursor: pointer; transition: border-color 0.14s, background 0.14s;
-      user-select: none;
-    }
-    .ev:hover            { border-color: var(--border-2); }
-    .ev.on               { border-color: var(--accent); background: var(--accent-bg); }
-    .ev input[type='checkbox'] {
-      width: auto; margin-top: 0.18rem; accent-color: var(--accent);
-      flex-shrink: 0; cursor: pointer;
-    }
-    .ev-name { font-weight: 600; font-size: 0.88rem; }
-    .ev-meta {
-      color: var(--muted); font-size: 0.76rem; margin-top: 0.2rem; line-height: 1.5;
-    }
-
-    .empty { color: var(--muted); font-size: 0.88rem; padding: 1rem 0; text-align: center; }
-
-    .footer {
-      display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;
-    }
-    .count { font-size: 0.82rem; color: var(--muted); margin-left: auto; }
-
+    /* ── Done state ───────────────────────── */
     .done-box {
       text-align: center; padding: 1.5rem 0;
       display: flex; flex-direction: column; align-items: center; gap: 1rem;
     }
     .done-box h3 { font-size: 1.1rem; color: var(--success); }
-    .done-box p  { color: var(--muted); font-size: 0.85rem; max-width: 400px; }
+    .done-box p { color: var(--muted); font-size: 0.85rem; max-width: 400px; }
+
+    input[type='search'] { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
   `];
 
   constructor() {
     super();
-    this.events     = [];
-    this.weeks      = 0;
-    this.semester   = '';
-    this.groupLabel = '';
-    this._query     = '';
-    this._selected  = new Set();
-    this._loading   = false;
-    this._error     = '';
-    this._done      = false;
-  }
-
-  /** Called by app-shell after events arrive. */
-  initSelection() {
-    this._selected = new Set(this.events.map((_, i) => i));
+    this.session = null;
+    this.courseGroups = [];
+    this._groupQuery = '';
+    this._loaded = new Map();
+    this._loadingStgru = null;
+    this._selected = new Set();
+    this._error = '';
+    this._downloading = false;
     this._done = false;
   }
 
-  get _filtered() {
-    const q = this._query.toLowerCase();
-    if (!q) return this.events;
-    return this.events.filter(ev =>
-      ev.summary.toLowerCase().includes(q) ||
-      (ev.location || '').toLowerCase().includes(q) ||
-      (ev.description || '').toLowerCase().includes(q),
-    );
+  // ══════════════════════════════════════════════════════
+  // Group loading
+  // ══════════════════════════════════════════════════════
+
+  async _loadGroup(group) {
+    if (this._loaded.has(group.stgru) || this._loadingStgru) return;
+    this._loadingStgru = group.stgru;
+    this._error = '';
+
+    try {
+      const res = await fetch('/api/timetable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cookies: this.session.cookies,
+          session: this.session.session,
+          user:    this.session.user,
+          stgru:   group.stgru,
+        }),
+      });
+      const data = await res.json();
+
+      if (res.status === 401) {
+        this.dispatchEvent(new CustomEvent('session-expired', { bubbles: true, composed: true }));
+        return;
+      }
+      if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
+
+      const courses = this._buildCourses(data.events || [], group);
+
+      const loaded = new Map(this._loaded);
+      loaded.set(group.stgru, { label: group.label, courses });
+      this._loaded = loaded;
+
+      // Auto-select all new courses
+      const sel = new Set(this._selected);
+      for (const c of courses) sel.add(c.id);
+      this._selected = sel;
+    } catch (e) {
+      this._error = e.message;
+    } finally {
+      this._loadingStgru = null;
+    }
   }
 
-  _toggle(i) {
+  _unloadGroup(stgru) {
+    const loaded = new Map(this._loaded);
+    const group = loaded.get(stgru);
+    loaded.delete(stgru);
+    this._loaded = loaded;
+
+    if (group) {
+      const sel = new Set(this._selected);
+      for (const c of group.courses) sel.delete(c.id);
+      this._selected = sel;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════
+  // Group events → courses
+  // ══════════════════════════════════════════════════════
+
+  _buildCourses(events, group) {
+    const map = new Map();
+
+    for (const ev of events) {
+      const name = (ev.summary || '').trim();
+      if (!name) continue;
+
+      if (!map.has(name)) {
+        map.set(name, {
+          id: `${group.stgru}::${name}`,
+          summary: name,
+          groupLabel: group.label,
+          slots: [],
+          events: [],
+          lecturer: '',
+          rooms: new Set(),
+        });
+      }
+
+      const course = map.get(name);
+      course.events.push(ev);
+
+      try {
+        const d = new Date(ev.dtstart);
+        const day = d.getDay();
+        const start = ev.dtstart.slice(11, 16);
+        const end = (ev.dtend || ev.dtstart).slice(11, 16);
+        const key = `${day}-${start}-${end}`;
+
+        if (!course.slots.some(s => s.key === key)) {
+          course.slots.push({ key, day, start, end, room: ev.location || '' });
+        }
+      } catch {}
+
+      if (ev.location) course.rooms.add(ev.location);
+      const lec = ev.description?.match(/Dozent:\s*(.+)/);
+      if (lec && !course.lecturer) course.lecturer = lec[1].trim();
+    }
+
+    return [...map.values()].sort((a, b) => a.summary.localeCompare(b.summary));
+  }
+
+  // ══════════════════════════════════════════════════════
+  // Selection
+  // ══════════════════════════════════════════════════════
+
+  _toggle(id) {
     const s = new Set(this._selected);
-    s.has(i) ? s.delete(i) : s.add(i);
+    s.has(id) ? s.delete(id) : s.add(id);
     this._selected = s;
   }
 
-  _selectAll(on) {
-    this._selected = on ? new Set(this.events.map((_, i) => i)) : new Set();
+  _selectGroup(stgru, on) {
+    const group = this._loaded.get(stgru);
+    if (!group) return;
+    const s = new Set(this._selected);
+    for (const c of group.courses) on ? s.add(c.id) : s.delete(c.id);
+    this._selected = s;
   }
 
-  _download() {
+  // ══════════════════════════════════════════════════════
+  // Computed
+  // ══════════════════════════════════════════════════════
+
+  get _allCourses() {
+    const out = [];
+    for (const [, g] of this._loaded) out.push(...g.courses);
+    return out;
+  }
+
+  get _selectedCourses() {
+    return this._allCourses.filter(c => this._selected.has(c.id));
+  }
+
+  get _previewSlots() {
+    return this._selectedCourses.flatMap(c => {
+      const color = hashColor(c.id);
+      return c.slots.map(s => ({
+        day: s.day, start: s.start, end: s.end,
+        label: c.summary, room: s.room, color,
+      }));
+    });
+  }
+
+  get _totalEvents() {
+    return this._selectedCourses.reduce((n, c) => n + c.events.length, 0);
+  }
+
+  // ══════════════════════════════════════════════════════
+  // Download
+  // ══════════════════════════════════════════════════════
+
+  async _download() {
+    const events = this._selectedCourses.flatMap(c => c.events);
+    if (!events.length) { this._error = 'Keine Kurse ausgewählt.'; return; }
+
+    this._downloading = true;
     this._error = '';
-    const chosen = [...this._selected].sort().map(i => this.events[i]).filter(Boolean);
-    if (!chosen.length) { this._error = 'Mindestens einen Termin auswählen.'; return; }
-    this.dispatchEvent(new CustomEvent('download-ics', {
-      bubbles: true, composed: true, detail: { events: chosen },
-    }));
-  }
 
-  /** Called by app-shell after ICS is downloaded. */
-  setDone()      { this._done = true; this._loading = false; }
-  setLoading(v)  { this._loading = v; }
-  setError(msg)  { this._error = msg; this._loading = false; }
-
-  // ── Helpers ───────────────────────────────────────────
-  _fmtDt(start, end) {
-    if (!start) return '';
     try {
-      const s = new Date(start);
-      const e = end ? new Date(end) : null;
-      const d = s.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-      const t1 = s.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-      const t2 = e ? e.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '';
-      return `${d}  ${t1}${t2 ? '–' + t2 : ''}`;
-    } catch { return start; }
+      const res = await fetch('/api/ics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Fehler ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'stundenplan.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+
+      this._done = true;
+    } catch (e) {
+      this._error = e.message;
+    } finally {
+      this._downloading = false;
+    }
   }
 
-  // ── Render ────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════
+  // Render
+  // ══════════════════════════════════════════════════════
+
   render() {
     if (this._done) return this._renderDone();
 
-    const filtered = this._filtered;
     return html`<div class="stack">
-      <h2><span class="badge">2</span> Termine auswählen</h2>
-
-      <p class="hint">
-        <strong>${this.groupLabel}</strong> · ${this.events.length} Termine
-        in ${this.weeks} Wochen
-        ${this.semester ? html` · <code>${this.semester}</code>` : ''}
-      </p>
-
-      <div class="toolbar">
-        <button class="btn-chip" @click=${() => this._selectAll(true)}>Alle</button>
-        <button class="btn-chip" @click=${() => this._selectAll(false)}>Keine</button>
-        <input type="search" placeholder="🔍 Filtern…"
-               .value=${this._query} @input=${e => this._query = e.target.value} />
-      </div>
-
-      <div class="event-list">
-        ${filtered.length
-          ? filtered.map(ev => {
-              const i = this.events.indexOf(ev);
-              const on = this._selected.has(i);
-              const meta = [
-                this._fmtDt(ev.dtstart, ev.dtend),
-                ev.location && `📍 ${ev.location}`,
-                ev.description?.split('\n')[0],
-              ].filter(Boolean).join('  ·  ');
-              return html`
-                <div class="ev ${on ? 'on' : ''}" @click=${() => this._toggle(i)}>
-                  <input type="checkbox" .checked=${on}
-                         @click=${e => e.stopPropagation()}
-                         @change=${() => this._toggle(i)} />
-                  <div>
-                    <div class="ev-name">${ev.summary}</div>
-                    ${meta ? html`<div class="ev-meta">${meta}</div>` : ''}
-                  </div>
-                </div>`;
-            })
-          : html`<p class="empty">Keine Treffer für „${this._query}"</p>`}
-      </div>
-
+      <h2><span class="badge">2</span> Stundenplan zusammenstellen</h2>
+      ${this._renderGroupPicker()}
+      ${this._loaded.size > 0 ? this._renderCourses() : ''}
+      ${this._previewSlots.length > 0 ? html`
+        <div class="divider"></div>
+        <span class="section-label">Vorschau</span>
+        <week-grid .slots=${this._previewSlots}></week-grid>
+      ` : ''}
       ${this._error ? html`<p class="error-msg">❌ ${this._error}</p>` : ''}
+      ${this._loaded.size > 0 ? this._renderFooter() : ''}
+    </div>`;
+  }
 
+  _renderGroupPicker() {
+    const loadedKeys = [...this._loaded.keys()];
+    const q = this._groupQuery.toLowerCase();
+    const available = this.courseGroups.filter(g =>
+      !loadedKeys.includes(g.stgru) && (!q || g.label.toLowerCase().includes(q))
+    );
+
+    return html`
+      ${loadedKeys.length > 0 ? html`
+        <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">
+          <span class="hint" style="font-weight:600">Geladen:</span>
+          ${loadedKeys.map(stgru => {
+            const g = this._loaded.get(stgru);
+            return html`<span class="chip active">
+              ${g.label}
+              <span class="x" @click=${() => this._unloadGroup(stgru)}>✕</span>
+            </span>`;
+          })}
+        </div>
+      ` : html`<p class="hint">Wähle eine Studiengruppe um Kurse zu laden.</p>`}
+
+      <input type="search" placeholder="🔍 Gruppe suchen… z.B. IF4, WIF6, KI2"
+             .value=${this._groupQuery}
+             @input=${e => this._groupQuery = e.target.value} />
+
+      <div class="chips">
+        ${available.slice(0, 50).map(g => html`
+          <span class="chip ${this._loadingStgru === g.stgru ? 'loading' : ''}"
+                @click=${() => this._loadGroup(g)}>
+            ${this._loadingStgru === g.stgru
+              ? html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>`
+              : ''}
+            ${g.label}
+          </span>`)}
+        ${available.length > 50
+          ? html`<span class="hint" style="padding:0.3rem">… ${available.length - 50} weitere</span>`
+          : ''}
+        ${available.length === 0 && q
+          ? html`<span class="hint">Keine Treffer</span>`
+          : ''}
+      </div>`;
+  }
+
+  _renderCourses() {
+    return html`
+      <div class="course-list">
+        ${[...this._loaded].map(([stgru, group]) => html`
+          <div class="group-hdr">
+            ${group.label} · ${group.courses.length} Kurse
+            <button class="btn-chip" @click=${() => this._selectGroup(stgru, true)}>Alle</button>
+            <button class="btn-chip" @click=${() => this._selectGroup(stgru, false)}>Keine</button>
+          </div>
+
+          ${group.courses.map(c => {
+            const on = this._selected.has(c.id);
+            const color = hashColor(c.id);
+            const slots = c.slots.map(s =>
+              `${DAY_SHORT[s.day]} ${s.start}–${s.end}${s.room ? ' · ' + s.room : ''}`
+            ).join('  ⸱  ');
+
+            return html`
+              <div class="course ${on ? 'on' : ''}" @click=${() => this._toggle(c.id)}>
+                <div class="color-dot" style="background:${color}"></div>
+                <input type="checkbox" .checked=${on}
+                       @click=${e => e.stopPropagation()}
+                       @change=${() => this._toggle(c.id)} />
+                <div style="flex:1;min-width:0">
+                  <div class="c-name">${c.summary}</div>
+                  <div class="c-meta">
+                    ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
+                  </div>
+                </div>
+                <span class="c-count">${c.events.length}×</span>
+              </div>`;
+          })}
+        `)}
+      </div>`;
+  }
+
+  _renderFooter() {
+    return html`
       <div class="footer">
         <button class="btn-ghost" @click=${() =>
             this.dispatchEvent(new CustomEvent('restart', { bubbles: true, composed: true }))}>
-          ← Zurück
+          ← Abmelden
         </button>
-        <span class="count">${this._selected.size} ausgewählt</span>
-        <button class="btn-primary" ?disabled=${this._loading} @click=${this._download}>
-          ${this._loading
+        <span class="stats">${this._selectedCourses.length} Kurse · ${this._totalEvents} Termine</span>
+        <button class="btn-primary"
+                ?disabled=${this._downloading || this._selectedCourses.length === 0}
+                @click=${this._download}>
+          ${this._downloading
             ? html`<span class="spinner"></span> Generiere…`
             : '📅 ICS herunterladen'}
         </button>
-      </div>
-    </div>`;
+      </div>`;
   }
 
   _renderDone() {
     return html`<div class="stack">
       <h2><span class="badge" style="background:var(--success)">✓</span> Fertig</h2>
       <div class="done-box">
-        <h3>🎉 stundenplan.ics wurde heruntergeladen</h3>
-        <p>
-          Öffne die Datei mit Google Calendar, Apple Kalender oder Outlook
-          um die Termine zu importieren.
-        </p>
-        <div class="row" style="justify-content:center">
-          <button class="btn-primary" @click=${() =>
+        <h3>🎉 stundenplan.ics heruntergeladen</h3>
+        <p>Öffne die Datei in Google Calendar, Apple Kalender oder Outlook um die Termine zu importieren.</p>
+        <div class="row" style="justify-content:center;gap:0.5rem">
+          <button class="btn-primary" @click=${() => { this._done = false; }}>← Zurück zum Plan</button>
+          <button class="btn-ghost" @click=${() =>
               this.dispatchEvent(new CustomEvent('restart', { bubbles: true, composed: true }))}>
-            Neuen Plan erstellen
+            Neuer Plan
           </button>
         </div>
       </div>

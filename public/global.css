@@ -50,5 +50,5 @@ app-shell {
   flex-direction: column;
   gap: 1.5rem;
   width: 100%;
-  max-width: 680px;
+  max-width: 720px;
 }
