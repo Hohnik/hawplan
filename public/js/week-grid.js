@@ -137,7 +137,7 @@ export class WeekGrid extends LitElement {
               <div class="ev"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
                           background:${s.color}18;border-left:3px solid ${s.color};color:${s.color}"
-                   title="${s.title || s.label}\n${s.start}–${s.end}${s.room ? '\n📍 ' + s.room : ''}">
+                   title="${s.label}\n${s.start}–${s.end}${s.room ? '\n📍 ' + s.room : ''}">
                 <span class="ev-label">${s.label}</span>
                 ${h > 38 && s.room ? html`<span class="ev-room">${s.room}</span>` : ''}
               </div>`;

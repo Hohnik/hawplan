@@ -343,14 +343,22 @@ def _parse_primuss_dt(s: str) -> str:
 def _parse_course_groups(html: str) -> list[dict]:
     groups = []
     for m in re.finditer(
-        r'StgruSet\((\d+),\s*(\d+)\)[^<]*<a[^>]+class="menu_stgru_link"[^>]*>([^<]+)</a>',
+        r'<li\b([^>]*)>\s*<a\b[^>]*class="menu_stgru_link"[^>]*>([^<]+)</a>',
         html,
     ):
-        label = m.group(3).strip()
+        attrs, label = m.group(1), m.group(2).strip()
+        stg_m = re.search(r'StgruSet\((\d+),\s*(\d+)\)', attrs)
+        if not stg_m:
+            continue
+        title_m = re.search(r'title="([^"]*)"', attrs)
+        title = title_m.group(1).strip() if title_m else ''
         prog = re.match(r'[A-Za-z]+', label)
+        # Title format: "Name (Degree) Name (Type) N. Semester" → extract first "Name (Degree)"
+        pname_m = re.match(r'(.+?\([^)]+\))', title) if title else None
         groups.append({
-            "label": label, "stg": m.group(1), "stgru": m.group(2),
+            "label": label, "stg": stg_m.group(1), "stgru": stg_m.group(2),
             "program": prog.group(0) if prog else label,
+            "program_name": pname_m.group(1).strip() if pname_m else '',
         })
     return groups
 

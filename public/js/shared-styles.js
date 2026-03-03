@@ -9,7 +9,7 @@ export const shared = css`
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 1.15rem 1.35rem;
+    padding: 1.25rem 1.5rem;
   }
 
   /* ── Typography ──────────────────────────── */
@@ -32,7 +32,7 @@ export const shared = css`
   }
 
   /* ── Layout ──────────────────────────────── */
-  .stack   { display: flex; flex-direction: column; gap: 0.85rem; }
+  .stack   { display: flex; flex-direction: column; gap: 1rem; }
   .row     { display: flex; gap: 0.6rem; flex-wrap: wrap; }
   .divider { height: 1px; background: var(--border); }
 

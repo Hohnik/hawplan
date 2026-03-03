@@ -50,8 +50,13 @@ export class TimetableView extends LitElement {
     }
     .prog-hdr:hover { background: var(--surface-2); }
     .prog-arrow { color: var(--muted); font-size: 0.6em; width: 0.85em; flex-shrink: 0; }
-    .prog-name  { font-weight: 600; }
-    .prog-count { margin-left: auto; font-size: 0.75rem; color: var(--muted); }
+    .prog-name  { font-weight: 600; flex-shrink: 0; }
+    .prog-label {
+      font-weight: 400; font-size: 0.76rem; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      flex: 1; min-width: 0;
+    }
+    .prog-count { margin-left: auto; font-size: 0.75rem; color: var(--muted); flex-shrink: 0; }
 
     .prog-chips {
       display: flex; flex-wrap: wrap; gap: 0.3rem;
@@ -267,7 +272,7 @@ export class TimetableView extends LitElement {
       const color = colorOf(c.id);
       return c.slots.map(s => ({
         day: s.day, start: s.start, end: s.end,
-        label: c.summary, title: c.fullName || c.summary,
+        label: c.fullName || c.summary,
         room: s.room, color,
       }));
     });
@@ -326,11 +331,20 @@ export class TimetableView extends LitElement {
     const q = this._query.toLowerCase();
     const loadedKeys = new Set([...this._loaded.keys()]);
 
-    // Group by program prefix
+    // Collect display names per program prefix
+    const progNames = new Map();
+    for (const g of this.courseGroups) {
+      if (g.program_name && !progNames.has(g.program))
+        progNames.set(g.program, g.program_name);
+    }
+
+    // Group by program prefix, filter by search
     const progs = new Map();
     for (const g of this.courseGroups) {
       const p = g.program || '?';
-      if (q && !g.label.toLowerCase().includes(q) && !p.toLowerCase().includes(q)) continue;
+      if (q && !g.label.toLowerCase().includes(q)
+            && !p.toLowerCase().includes(q)
+            && !(g.program_name || '').toLowerCase().includes(q)) continue;
       if (!progs.has(p)) progs.set(p, []);
       progs.get(p).push(g);
     }
@@ -353,12 +367,14 @@ export class TimetableView extends LitElement {
         ${[...progs].sort(([a], [b]) => a.localeCompare(b)).map(([prog, groups]) => {
           const open = q || this._expanded.has(prog);
           const loadedN = groups.filter(g => loadedKeys.has(g.stgru)).length;
+          const pname = progNames.get(prog) || '';
           return html`
             <div class="prog-hdr" @click=${() => !q && this._toggleExpand(prog)}>
               <span class="prog-arrow">${open ? '▾' : '▸'}</span>
               <span class="prog-name">${prog}</span>
+              ${pname ? html`<span class="prog-label">${pname}</span>` : ''}
               <span class="prog-count">
-                ${groups.length} Gruppen${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}
+                ${groups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}
               </span>
             </div>
             ${open ? html`

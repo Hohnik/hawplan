@@ -1,5 +1,13 @@
 # Logbook
 
+## 2026-03-03 — Full names in grid, program names from Primuss HTML, spacing fix
+
+**Full names in timetable grid:** Week grid events now show `fullName` (e.g. "Internet of Things") instead of the short code ("IoT"). Long names truncate with ellipsis; hover tooltip shows the complete name. Changed in `_previewSlots` — `label` is now `c.fullName || c.summary`.
+
+**Program names from HTML:** Backend now parses `<li title="...">` attributes from the Primuss landing page. Title format is `"Name (Degree) Name (Type) N. Semester"` — regex `r'(.+?\([^)]+\))'` extracts the first `"Name (Degree)"` portion. Each group now has a `program_name` field (e.g. "Internationale Betriebswirtschaft (MA)"). Accordion headers display: `MIB — Internationale Betriebswirtschaft (MA) · 4`. Search also matches against program names (e.g. typing "informatik" finds IF groups). Regex handles `title` before or after `onclick` attribute.
+
+**Stack spacing:** Increased `:host` padding (`1.15rem 1.35rem` → `1.25rem 1.5rem`) and `.stack` gap (`0.85rem` → `1rem`) for more breathing room between card borders and content.
+
 ## 2026-03-03 — Faculty grouping, full names, design polish
 
 **Faculty/program accordion:** Replaced flat chip list ("… 108 weitere") with an accordion grouped by program prefix (IF, WIF, KI, etc.). Each program row is expandable; shows group count and how many are loaded. Search auto-expands all matching programs. Eliminates the 50-item cutoff entirely — all 160 groups accessible via ~20 collapsed program rows.
