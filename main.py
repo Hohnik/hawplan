@@ -179,12 +179,25 @@ _BORING_FIELDS = {
 def _find_field(fields: dict, key_set: set[str]) -> str | None:
     return next((k for k in fields if k.lower() in key_set), None)
 
+def _is_login_form(fields: dict) -> bool:
+    """A real login form has BOTH a username AND a password field together."""
+    return bool(_find_field(fields, _USERNAME_KEYS) and _find_field(fields, _PASSWORD_KEYS))
+
 def _is_mfa_form(fields: dict) -> bool:
-    """Heuristic: a form is an MFA form if it has no password field and at least
-    one field that isn't a known boring hidden field or CSRF token."""
-    has_pw = _find_field(fields, _PASSWORD_KEYS)
-    if has_pw:
+    """
+    An MFA form is any form that is NOT a full login form but still has
+    some interactive input for the user:
+      • known token field name (j_tokenNumber, otp, …)
+      • a lone 'password'-named field with NO username sibling
+        (some IDPs name the OTP input 'password')
+      • any other non-boring, non-shib-internal field
+    """
+    if _is_login_form(fields):
         return False
+    if _find_field(fields, _TOKEN_KEYS):
+        return True
+    if _find_field(fields, _PASSWORD_KEYS) and not _find_field(fields, _USERNAME_KEYS):
+        return True   # lone 'password' = OTP input
     interesting = [
         k for k in fields
         if k.lower() not in _BORING_FIELDS
@@ -193,12 +206,16 @@ def _is_mfa_form(fields: dict) -> bool:
     return bool(interesting)
 
 def _guess_token_field(fields: dict) -> str | None:
-    """Return the most likely token field name."""
-    # 1. Exact known name
+    """Return the most likely token input field name."""
+    # 1. Known token field name
     known = _find_field(fields, _TOKEN_KEYS)
     if known:
         return known
-    # 2. Fallback: first field that isn't boring
+    # 2. Lone 'password'-named field (no username sibling)
+    pw = _find_field(fields, _PASSWORD_KEYS)
+    if pw and not _find_field(fields, _USERNAME_KEYS):
+        return pw
+    # 3. First non-boring field
     for k in fields:
         if k.lower() not in _BORING_FIELDS and not k.lower().startswith("shib_idp_ls_"):
             return k
@@ -286,10 +303,10 @@ async def shibboleth_phase1(username: str, password: str) -> dict:
                     headers={**BROWSER_HEADERS, "Referer": str(r.url),
                              "Content-Type": "application/x-www-form-urlencoded"},
                 )
-                # If IDP returns another password form → wrong credentials
+                # IDP returned another full login form (username+password) → wrong credentials
                 nf = FormExtractor.parse(r.text)
                 if (not any("SAMLResponse" in f["fields"] for f in nf)
-                        and any(_find_field(f["fields"], _PASSWORD_KEYS) for f in nf)):
+                        and any(_is_login_form(f["fields"]) for f in nf)):
                     raise HTTPException(
                         status_code=401,
                         detail="Benutzername oder Passwort falsch.",
@@ -396,6 +413,84 @@ async def detect_stgru(
 
 
 # ── API Routes ────────────────────────────────────────────────────
+
+@app.post("/api/login/trace")
+async def login_trace(req: LoginRequest):
+    """
+    Diagnostic endpoint: walks the Shibboleth flow with real credentials and
+    returns a step-by-step trace (URLs, form field names, classification).
+    NEVER returns secrets/values — only field names and URLs.
+    Useful for debugging unexpected IDP form structures.
+    """
+    steps = []
+    _USERNAME_K = _USERNAME_KEYS
+    _PASSWORD_K = _PASSWORD_KEYS
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=30.0, headers=BROWSER_HEADERS,
+    ) as client:
+        r = await client.get(
+            f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANGUAGE}"
+        )
+        credentials_sent = False
+
+        for step_n in range(8):
+            forms  = FormExtractor.parse(r.text)
+            title  = re.search(r"<title[^>]*>([^<]+)", r.text)
+            step_info = {
+                "step":           step_n + 1,
+                "url":            str(r.url),
+                "page_title":     title.group(1).strip() if title else "",
+                "forms_found":    len(forms),
+                "field_names":    list(forms[0]["fields"].keys()) if forms else [],
+                "action":         forms[0]["action"] if forms else "",
+                "classification": "unknown",
+            }
+
+            if not forms:
+                step_info["classification"] = "no_form"
+                steps.append(step_info)
+                break
+
+            fields = dict(forms[0]["fields"])
+            action = forms[0]["action"]
+            if not action.startswith("http"):
+                action = urljoin(str(r.url), action)
+
+            if "SAMLResponse" in fields:
+                step_info["classification"] = "saml_response"
+                steps.append(step_info)
+                break
+            elif _is_login_form(fields):
+                step_info["classification"] = "login_form"
+                steps.append(step_info)
+                if not credentials_sent:
+                    fields[_find_field(fields, _USERNAME_K) or "j_username"] = req.username
+                    fields[_find_field(fields, _PASSWORD_K) or "j_password"] = req.password
+                    credentials_sent = True
+                    r = await client.post(action, data=fields,
+                        headers={**BROWSER_HEADERS, "Referer": str(r.url),
+                                 "Content-Type": "application/x-www-form-urlencoded"})
+                    continue
+                else:
+                    step_info["classification"] = "login_form_again__wrong_credentials"
+                    break
+            elif credentials_sent and _is_mfa_form(fields):
+                tok = _guess_token_field(fields)
+                step_info["classification"] = "mfa_form"
+                step_info["token_field"]    = tok
+                steps.append(step_info)
+                break
+            else:
+                step_info["classification"] = "intermediate_form"
+                steps.append(step_info)
+                r = await client.post(action, data=fields,
+                    headers={**BROWSER_HEADERS, "Referer": str(r.url),
+                             "Content-Type": "application/x-www-form-urlencoded"})
+                continue
+
+    return JSONResponse({"trace": steps})
+
 
 @app.post("/api/login")
 async def login(req: LoginRequest):

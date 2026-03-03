@@ -149,7 +149,8 @@ export class StepCredentials extends LitElement {
       const data = await res.json();
 
       if (!res.ok) {
-        this._authError = data.detail ?? `Fehler ${res.status}`;
+        this._authError = (data.detail ?? `Fehler ${res.status}`)
+          + (res.status === 401 ? '' : ' — Trace-Endpoint: POST /api/login/trace');
         this._authPhase = 'idle';
         return;
       }
