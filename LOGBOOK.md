@@ -1,5 +1,17 @@
 # Logbook
 
+## 2026-03-03 — Faculty→Degree→Program tree from Primuss HTML
+
+**Real hierarchy parsed:** Rewrote `_parse_course_groups()` to extract the full Primuss tree structure: Faculty (orga) → Degree (Bachelor/Master/Sonstige) → Program (stg) → Semester groups. Uses a position-based strategy — locates all structural elements (`<label for="orga_N">`, degree text nodes, `<input id="stg_N">`) by their position in the HTML, then walks them in document order to reconstruct ancestry. This avoids nested `<ol>` regex problems entirely.
+
+**Result:** 7 faculties (BW, ET/WI, GKM, IF, MB, SA, SSG), 57 programs, 160 semester groups. Each group carries: `faculty`, `degree`, `program_code`, `program_name`, `stg`, `stgru`, `label`.
+
+**API returns both:** `course_tree` (hierarchical, for accordion rendering) and `course_groups` (flat, for compatibility). Frontend now receives `courseTree` prop.
+
+**3-level accordion in frontend:** timetable-view renders Faculty → Degree → Program → chips. Each level is independently expandable. Search auto-expands all levels to matching items and also matches against program names (e.g. "informatik" finds IF faculty programs). Indentation via padding-left (0.75→1.5→2.25→3rem).
+
+**Padding fix:** User reported 0 padding — increased `:host` padding to `1.25rem 1.5rem` and `.stack` gap to `1rem`.
+
 ## 2026-03-03 — Full names in grid, program names from Primuss HTML, spacing fix
 
 **Full names in timetable grid:** Week grid events now show `fullName` (e.g. "Internet of Things") instead of the short code ("IoT"). Long names truncate with ellipsis; hover tooltip shows the complete name. Changed in `_previewSlots` — `label` is now `c.fullName || c.summary`.

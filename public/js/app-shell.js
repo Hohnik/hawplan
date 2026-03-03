@@ -11,7 +11,7 @@ export class AppShell extends LitElement {
   static properties = {
     _step:         { state: true },   // 'login' | 'timetable'
     _session:      { state: true },   // { cookies, session, user }
-    _courseGroups: { state: true },   // [{ label, stg, stgru }]
+    _courseTree:   { state: true },   // [{ label, degrees: [{ label, programs: [...] }] }]
     _checking:     { state: true },   // true while checking cached session
   };
 
@@ -21,7 +21,7 @@ export class AppShell extends LitElement {
     super();
     this._step = 'login';
     this._session = null;
-    this._courseGroups = [];
+    this._courseTree = [];
     this._checking = true;
   }
 
@@ -39,7 +39,7 @@ export class AppShell extends LitElement {
       const data = await res.json();
       if (data.cookies) {
         this._session = { cookies: data.cookies, session: data.session, user: data.user };
-        this._courseGroups = data.course_groups || [];
+        this._courseTree = data.course_tree || [];
         this._step = 'timetable';
       }
     } catch { /* no cached session */ }
@@ -48,13 +48,13 @@ export class AppShell extends LitElement {
 
   _onLoginSuccess(detail) {
     this._session = { cookies: detail.cookies, session: detail.session, user: detail.user };
-    this._courseGroups = detail.courseGroups || [];
+    this._courseTree = detail.courseTree || [];
     this._step = 'timetable';
   }
 
   _onSessionExpired() {
     this._session = null;
-    this._courseGroups = [];
+    this._courseTree = [];
     this._step = 'login';
   }
 
@@ -64,7 +64,7 @@ export class AppShell extends LitElement {
     if (this._step === 'timetable' && this._session) {
       return html`<timetable-view
         .session=${this._session}
-        .courseGroups=${this._courseGroups}
+        .courseTree=${this._courseTree}
       ></timetable-view>`;
     }
     return html`<login-view></login-view>`;

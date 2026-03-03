@@ -16,14 +16,17 @@ const DAY = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 
 /**
  * <timetable-view>
- * Group picker → course selection → preview → download.
+ * Faculty tree picker → course selection → preview → download.
+ *
+ * Props: .session    { cookies, session, user }
+ *        .courseTree  [{ label, degrees: [{ label, programs: [{ code, name, groups }] }] }]
  */
 export class TimetableView extends LitElement {
   static properties = {
     session:       { type: Object },
-    courseGroups:   { type: Array },
+    courseTree:     { type: Array },
     _query:        { state: true },
-    _expanded:     { state: true },   // Set<program>
+    _open:         { state: true },   // Set<string> expanded keys ("fac::BW", "deg::BW::Master")
     _loaded:       { state: true },   // Map<stgru, { label, courses[] }>
     _loadingStgru: { state: true },
     _selected:     { state: true },   // Set<courseId>
@@ -33,49 +36,46 @@ export class TimetableView extends LitElement {
   };
 
   static styles = [shared, css`
-    /* ── Program accordion ────────────── */
-    .progs {
+    /* ── Tree accordion ───────────────── */
+    .tree {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      max-height: 300px; overflow-y: auto;
+      max-height: 340px; overflow-y: auto;
     }
-    .progs::-webkit-scrollbar { width: 4px; }
-    .progs::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+    .tree::-webkit-scrollbar { width: 4px; }
+    .tree::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
 
-    .prog-hdr {
-      display: flex; align-items: center; gap: 0.5rem;
-      padding: 0.5rem 0.8rem;
-      cursor: pointer; font-size: 0.84rem;
+    .row-fac, .row-deg, .row-prog {
+      display: flex; align-items: center; gap: 0.45rem;
+      cursor: pointer; transition: background 0.1s;
       border-bottom: 1px solid var(--border);
-      transition: background 0.1s;
     }
-    .prog-hdr:hover { background: var(--surface-2); }
-    .prog-arrow { color: var(--muted); font-size: 0.6em; width: 0.85em; flex-shrink: 0; }
-    .prog-name  { font-weight: 600; flex-shrink: 0; }
-    .prog-label {
-      font-weight: 400; font-size: 0.76rem; color: var(--muted);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      flex: 1; min-width: 0;
-    }
-    .prog-count { margin-left: auto; font-size: 0.75rem; color: var(--muted); flex-shrink: 0; }
+    .row-fac:hover, .row-deg:hover, .row-prog:hover { background: var(--surface-2); }
+    .tree > :last-child { border-bottom: none; }
 
-    .prog-chips {
+    .row-fac  { padding: 0.5rem 0.75rem; font-size: 0.86rem; font-weight: 600; }
+    .row-deg  { padding: 0.4rem 0.75rem 0.4rem 1.5rem; font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+    .row-prog { padding: 0.35rem 0.75rem 0.35rem 2.25rem; font-size: 0.8rem; }
+
+    .arrow { color: var(--muted); font-size: 0.55em; width: 0.8em; flex-shrink: 0; }
+    .prog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .count { font-size: 0.72rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+    .chips-row {
       display: flex; flex-wrap: wrap; gap: 0.3rem;
-      padding: 0.4rem 0.8rem 0.5rem;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
+      padding: 0.35rem 0.75rem 0.45rem 3rem;
+      background: var(--bg); border-bottom: 1px solid var(--border);
     }
-    .progs > :last-child { border-bottom: none; }
 
     /* ── Chips ─────────────────────────── */
     .loaded-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
     .loaded-label { font-size: 0.78rem; font-weight: 600; color: var(--muted); }
 
     .chip {
-      padding: 0.25rem 0.6rem; font-size: 0.76rem;
+      padding: 0.22rem 0.55rem; font-size: 0.74rem;
       border-radius: 99px; border: 1px solid var(--border);
       background: var(--bg); color: var(--muted);
       cursor: pointer; transition: all 0.12s;
-      display: inline-flex; align-items: center; gap: 0.25rem;
+      display: inline-flex; align-items: center; gap: 0.2rem;
     }
     .chip:hover { border-color: var(--accent); color: var(--text); }
     .chip.active {
@@ -138,11 +138,10 @@ export class TimetableView extends LitElement {
       white-space: nowrap; flex-shrink: 0; padding-top: 3px;
     }
 
-    /* ── Footer ────────────────────────── */
+    /* ── Footer / Done ─────────────────── */
     .foot { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
     .stats { font-size: 0.82rem; color: var(--muted); margin-left: auto; }
 
-    /* ── Done ──────────────────────────── */
     .done {
       text-align: center; padding: 1.5rem 0;
       display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
@@ -155,15 +154,23 @@ export class TimetableView extends LitElement {
   constructor() {
     super();
     this.session = null;
-    this.courseGroups = [];
+    this.courseTree = [];
     this._query = '';
-    this._expanded = new Set();
+    this._open = new Set();
     this._loaded = new Map();
     this._loadingStgru = null;
     this._selected = new Set();
     this._error = '';
     this._downloading = false;
     this._done = false;
+  }
+
+  /* ═══ Tree toggle ════════════════════════════════ */
+
+  _toggle_open(key) {
+    const s = new Set(this._open);
+    s.has(key) ? s.delete(key) : s.add(key);
+    this._open = s;
   }
 
   /* ═══ Data loading ═══════════════════════════════ */
@@ -255,12 +262,6 @@ export class TimetableView extends LitElement {
     this._selected = s;
   }
 
-  _toggleExpand(prog) {
-    const e = new Set(this._expanded);
-    e.has(prog) ? e.delete(prog) : e.add(prog);
-    this._expanded = e;
-  }
-
   /* ═══ Computed ═══════════════════════════════════ */
 
   get _allCourses() { return [...this._loaded.values()].flatMap(g => g.courses); }
@@ -331,24 +332,6 @@ export class TimetableView extends LitElement {
     const q = this._query.toLowerCase();
     const loadedKeys = new Set([...this._loaded.keys()]);
 
-    // Collect display names per program prefix
-    const progNames = new Map();
-    for (const g of this.courseGroups) {
-      if (g.program_name && !progNames.has(g.program))
-        progNames.set(g.program, g.program_name);
-    }
-
-    // Group by program prefix, filter by search
-    const progs = new Map();
-    for (const g of this.courseGroups) {
-      const p = g.program || '?';
-      if (q && !g.label.toLowerCase().includes(q)
-            && !p.toLowerCase().includes(q)
-            && !(g.program_name || '').toLowerCase().includes(q)) continue;
-      if (!progs.has(p)) progs.set(p, []);
-      progs.get(p).push(g);
-    }
-
     return html`
       ${loadedKeys.size > 0 ? html`
         <div class="loaded-chips">
@@ -363,35 +346,85 @@ export class TimetableView extends LitElement {
       <input type="search" placeholder="🔍 Studiengruppe suchen…"
              .value=${this._query} @input=${e => this._query = e.target.value} />
 
-      <div class="progs">
-        ${[...progs].sort(([a], [b]) => a.localeCompare(b)).map(([prog, groups]) => {
-          const open = q || this._expanded.has(prog);
-          const loadedN = groups.filter(g => loadedKeys.has(g.stgru)).length;
-          const pname = progNames.get(prog) || '';
-          return html`
-            <div class="prog-hdr" @click=${() => !q && this._toggleExpand(prog)}>
-              <span class="prog-arrow">${open ? '▾' : '▸'}</span>
-              <span class="prog-name">${prog}</span>
-              ${pname ? html`<span class="prog-label">${pname}</span>` : ''}
-              <span class="prog-count">
-                ${groups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}
-              </span>
-            </div>
-            ${open ? html`
-              <div class="prog-chips">
-                ${groups.map(g => {
-                  const active = loadedKeys.has(g.stgru);
-                  const loading = this._loadingStgru === g.stgru;
-                  return html`
-                    <span class="chip ${active ? 'active' : ''} ${loading ? 'loading' : ''}"
-                          @click=${e => { e.stopPropagation(); active ? this._unloadGroup(g.stgru) : this._loadGroup(g); }}>
-                      ${loading ? html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>` : ''}
-                      ${g.label}${active ? html` <span class="x">✕</span>` : ''}
-                    </span>`;
-                })}
-              </div>` : ''}`;
-        })}
+      <div class="tree">
+        ${(this.courseTree || []).map(fac => this._renderFac(fac, q, loadedKeys))}
       </div>`;
+  }
+
+  _renderFac(fac, q, loadedKeys) {
+    // Collect all groups under this faculty, apply search filter
+    const allGroups = fac.degrees.flatMap(d => d.programs.flatMap(p => p.groups));
+    const matches = q
+      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
+          || (g.program_name || '').toLowerCase().includes(q)
+          || fac.label.toLowerCase().includes(q))
+      : allGroups;
+    if (!matches.length) return '';
+
+    const fKey = `fac::${fac.label}`;
+    const open = q || this._open.has(fKey);
+    const loadedN = allGroups.filter(g => loadedKeys.has(g.stgru)).length;
+
+    return html`
+      <div class="row-fac" @click=${() => !q && this._toggle_open(fKey)}>
+        <span class="arrow">${open ? '▾' : '▸'}</span>
+        ${fac.label}
+        <span class="count">${allGroups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}</span>
+      </div>
+      ${open ? fac.degrees.map(deg => this._renderDeg(fac, deg, q, loadedKeys)) : ''}`;
+  }
+
+  _renderDeg(fac, deg, q, loadedKeys) {
+    const allGroups = deg.programs.flatMap(p => p.groups);
+    const matches = q
+      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
+          || (g.program_name || '').toLowerCase().includes(q)
+          || fac.label.toLowerCase().includes(q))
+      : allGroups;
+    if (!matches.length) return '';
+
+    const dKey = `deg::${fac.label}::${deg.label}`;
+    const open = q || this._open.has(dKey);
+
+    return html`
+      <div class="row-deg" @click=${() => !q && this._toggle_open(dKey)}>
+        <span class="arrow">${open ? '▾' : '▸'}</span>
+        ${deg.label}
+        <span class="count">${allGroups.length}</span>
+      </div>
+      ${open ? deg.programs.map(prog => this._renderProg(fac, deg, prog, q, loadedKeys)) : ''}`;
+  }
+
+  _renderProg(fac, deg, prog, q, loadedKeys) {
+    const groups = q
+      ? prog.groups.filter(g => g.label.toLowerCase().includes(q)
+          || (g.program_name || '').toLowerCase().includes(q)
+          || fac.label.toLowerCase().includes(q))
+      : prog.groups;
+    if (!groups.length) return '';
+
+    const pKey = `prog::${fac.label}::${prog.code}`;
+    const open = q || this._open.has(pKey);
+
+    return html`
+      <div class="row-prog" @click=${() => !q && this._toggle_open(pKey)}>
+        <span class="arrow">${open ? '▾' : '▸'}</span>
+        <span class="prog-name">${prog.name || prog.code}</span>
+        <span class="count">${groups.length}</span>
+      </div>
+      ${open ? html`
+        <div class="chips-row">
+          ${groups.map(g => {
+            const active = loadedKeys.has(g.stgru);
+            const loading = this._loadingStgru === g.stgru;
+            return html`
+              <span class="chip ${active ? 'active' : ''} ${loading ? 'loading' : ''}"
+                    @click=${e => { e.stopPropagation(); active ? this._unloadGroup(g.stgru) : this._loadGroup(g); }}>
+                ${loading ? html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>` : ''}
+                ${g.label}${active ? html` <span class="x">✕</span>` : ''}
+              </span>`;
+          })}
+        </div>` : ''}`;
   }
 
   _renderCourses() {

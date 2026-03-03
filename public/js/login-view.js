@@ -4,7 +4,7 @@ import { shared } from './shared-styles.js';
 /**
  * <login-view>
  * Handles Shibboleth login (auto from .env or manual entry).
- * Emits: 'login-success' { detail: { cookies, session, user, courseGroups } }
+ * Emits: 'login-success' { detail: { cookies, session, user, courseTree } }
  */
 export class LoginView extends LitElement {
   static properties = {
@@ -124,7 +124,7 @@ export class LoginView extends LitElement {
         cookies:      data.cookies,
         session:      data.session,
         user:         data.user,
-        courseGroups:  data.course_groups ?? [],
+        courseTree:    data.course_tree ?? [],
       },
     }));
   }

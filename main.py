@@ -240,7 +240,8 @@ async def _finish_saml(client: httpx.AsyncClient, r) -> dict:
     user    = (m.group(1) if (m := re.search(r"[?&]User=([^&#]+)",    url)) else "")
     groups  = _parse_course_groups(final.text)
 
-    return {"cookies": cookie_str, "session": session, "user": user, "course_groups": groups}
+    return {"cookies": cookie_str, "session": session, "user": user,
+            "course_tree": groups["tree"], "course_groups": groups["flat"]}
 
 
 async def shibboleth_login(username: str, password: str) -> dict:
@@ -340,8 +341,59 @@ def _parse_primuss_dt(s: str) -> str:
     mo, d, y, h, mi = m.groups()
     return f"{y}-{int(mo):02d}-{int(d):02d}T{int(h):02d}:{mi}:00"
 
-def _parse_course_groups(html: str) -> list[dict]:
-    groups = []
+def _parse_course_groups(html: str) -> dict:
+    """Parse the Primuss tree: Faculty → Degree → Program → Semester groups.
+
+    Returns {"tree": [...], "flat": [...]} where tree has the full hierarchy
+    and flat is a convenience list of all leaf groups with ancestry.
+
+    Strategy: regex can't handle nested <ol> tags, so we locate all structural
+    elements by position and walk them in document order to reconstruct the tree.
+    """
+    # 1. Locate structural elements by position
+    fac_pos = {m.start(): m.group(1).strip()
+               for m in re.finditer(r'<label\s+for="orga_\d+"[^>]*>([^<]+)</label>', html)}
+
+    deg_pos: dict[int, str] = {}
+    for m in re.finditer(r'</li>\s*(Bachelor|Master|Sonstige)\s*<li', html):
+        deg_pos[m.start()] = m.group(1)
+    for m in re.finditer(r'<ol\s*>\s*(Bachelor|Master|Sonstige)\s', html):
+        deg_pos[m.start()] = m.group(1)
+
+    stg_info: dict[str, str] = {}
+    stg_pos: dict[int, str] = {}
+    for m in re.finditer(r'<input[^>]*?id="stg_(\d+)"[^>]*?title="([^"]*)"', html):
+        stg_info[m.group(1)] = m.group(2).strip()
+        stg_pos[m.start()] = m.group(1)
+
+    stg_labels = {m.group(1): m.group(2).strip()
+                  for m in re.finditer(r'<label\s+for="stg_(\d+)"[^>]*>([^<]+)</label>', html)}
+
+    # 2. Walk document order to assign faculty + degree to each program
+    events = sorted(
+        [("fac", p, d) for p, d in fac_pos.items()] +
+        [("deg", p, d) for p, d in deg_pos.items()] +
+        [("stg", p, d) for p, d in stg_pos.items()],
+        key=lambda x: x[1],
+    )
+    programs: list[dict] = []  # [{fac, deg, stg_id, name, code}]
+    cur_fac, cur_deg = "", ""
+    for kind, _, data in events:
+        if kind == "fac":
+            cur_fac = data
+        elif kind == "deg":
+            cur_deg = data
+        elif kind == "stg":
+            programs.append({
+                "fac": cur_fac, "deg": cur_deg, "stg_id": data,
+                "name": stg_info.get(data, ""), "code": stg_labels.get(data, ""),
+            })
+
+    # 3. Map stg_id → program info for leaf-group enrichment
+    stg_map = {p["stg_id"]: p for p in programs}
+
+    # 4. Find all leaf groups (semester groups with StgruSet onclick)
+    flat: list[dict] = []
     for m in re.finditer(
         r'<li\b([^>]*)>\s*<a\b[^>]*class="menu_stgru_link"[^>]*>([^<]+)</a>',
         html,
@@ -350,17 +402,42 @@ def _parse_course_groups(html: str) -> list[dict]:
         stg_m = re.search(r'StgruSet\((\d+),\s*(\d+)\)', attrs)
         if not stg_m:
             continue
-        title_m = re.search(r'title="([^"]*)"', attrs)
-        title = title_m.group(1).strip() if title_m else ''
-        prog = re.match(r'[A-Za-z]+', label)
-        # Title format: "Name (Degree) Name (Type) N. Semester" → extract first "Name (Degree)"
-        pname_m = re.match(r'(.+?\([^)]+\))', title) if title else None
-        groups.append({
-            "label": label, "stg": stg_m.group(1), "stgru": stg_m.group(2),
-            "program": prog.group(0) if prog else label,
-            "program_name": pname_m.group(1).strip() if pname_m else '',
+        stg_id, stgru = stg_m.group(1), stg_m.group(2)
+        prog = stg_map.get(stg_id, {})
+        flat.append({
+            "label": label, "stg": stg_id, "stgru": stgru,
+            "faculty": prog.get("fac", ""),
+            "degree": prog.get("deg", ""),
+            "program_code": prog.get("code", ""),
+            "program_name": prog.get("name", ""),
         })
-    return groups
+
+    # 5. Build tree: Faculty → Degree → Program → Groups
+    tree: list[dict] = []
+    fac_idx: dict[str, dict] = {}
+    for grp in flat:
+        fac_key = grp["faculty"] or "Sonstige"
+        if fac_key not in fac_idx:
+            fac_node = {"label": fac_key, "degrees": []}
+            fac_idx[fac_key] = fac_node
+            tree.append(fac_node)
+        fac_node = fac_idx[fac_key]
+
+        deg_key = grp["degree"] or "Sonstige"
+        deg_node = next((d for d in fac_node["degrees"] if d["label"] == deg_key), None)
+        if not deg_node:
+            deg_node = {"label": deg_key, "programs": []}
+            fac_node["degrees"].append(deg_node)
+
+        prog_key = grp["program_code"] or grp["label"]
+        prog_node = next((p for p in deg_node["programs"] if p["code"] == prog_key), None)
+        if not prog_node:
+            prog_node = {"code": prog_key, "name": grp["program_name"], "groups": []}
+            deg_node["programs"].append(prog_node)
+
+        prog_node["groups"].append(grp)
+
+    return {"tree": tree, "flat": flat}
 
 def normalize_event(raw) -> dict | None:
     """Convert Primuss event list → clean dict with metadata for grouping."""
