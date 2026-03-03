@@ -90,16 +90,37 @@ export class WeekGrid extends LitElement {
       ...s, startMin: this._toMin(s.start), endMin: this._toMin(s.end),
     })).sort((a, b) => a.startMin - b.startMin || (b.endMin - b.startMin) - (a.endMin - a.startMin));
 
-    const columns = [];
-    const assigned = [];
-    for (const item of items) {
-      let col = columns.findIndex(c => c[c.length - 1].endMin <= item.startMin);
-      if (col === -1) { col = columns.length; columns.push([]); }
-      columns[col].push(item);
-      assigned.push(col);
+    // Split into clusters of overlapping events
+    const clusters = [];
+    let cur = [items[0]], curEnd = items[0].endMin;
+    for (let i = 1; i < items.length; i++) {
+      if (items[i].startMin < curEnd) {
+        cur.push(items[i]);
+        curEnd = Math.max(curEnd, items[i].endMin);
+      } else {
+        clusters.push(cur);
+        cur = [items[i]];
+        curEnd = items[i].endMin;
+      }
     }
-    const total = columns.length;
-    return items.map((item, i) => ({ ...item, left: assigned[i] / total, width: 1 / total }));
+    clusters.push(cur);
+
+    // Layout each cluster independently — only overlapping events share columns
+    const result = [];
+    for (const group of clusters) {
+      const cols = [];
+      const assigned = [];
+      for (const item of group) {
+        let col = cols.findIndex(c => c[c.length - 1].endMin <= item.startMin);
+        if (col === -1) { col = cols.length; cols.push([]); }
+        cols[col].push(item);
+        assigned.push(col);
+      }
+      const total = cols.length;
+      for (let i = 0; i < group.length; i++)
+        result.push({ ...group[i], left: assigned[i] / total, width: 1 / total });
+    }
+    return result;
   }
 
   render() {
