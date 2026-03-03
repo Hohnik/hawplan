@@ -124,129 +124,130 @@ async def shibboleth_login(username: str, password: str) -> dict:
     """
     Automate the full Shibboleth SSO flow for HS Landshut / Primuss.
 
-    Flow:
-      1. GET login_shibb.php  →  follows redirects to university IDP login form
-      2. Inject credentials into the form, POST to IDP
-      3. IDP returns an auto-submit form with SAMLResponse hidden field
-      4. POST SAMLResponse to the SP's ACS endpoint
-      5. SP sets _shibsession cookie, redirects to Primuss target URL
-      6. Extract final cookies + Session/User from the URL
+    The IDP uses a multi-step form flow:
+      e1s1 — "local storage check" (hidden fields, no credentials, submit as-is)
+      e1s2 — real login form (csrf_token + j_username + j_password)
+      →  SAMLResponse form  →  POST to SP ACS  →  Primuss session cookies
 
-    Returns { cookies, session, user, stgru } or raises HTTPException.
+    We handle this generically: loop through forms, submit intermediate ones
+    as-is, inject credentials only when a password field is detected.
     """
+    _USERNAME_KEYS = {"j_username", "username", "user", "uid", "login"}
+    _PASSWORD_KEYS = {"j_password", "password", "pass", "passwd", "pw"}
+
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=30.0,
         headers=BROWSER_HEADERS,
     ) as client:
 
-        # ── 1. Reach IDP login page ───────────────────────────────
-        r1 = await client.get(
+        # ── 1. Reach IDP (follows all SP→IDP redirects automatically) ─
+        r = await client.get(
             f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANGUAGE}"
         )
-        idp_login_url = str(r1.url)
 
-        forms = FormExtractor.parse(r1.text)
-        if not forms:
+        # ── 2. Walk through IDP form steps ────────────────────────────
+        #  Keep submitting forms until we land on the SAMLResponse form.
+        #  Limit to 6 iterations to guard against redirect loops.
+        for step in range(6):
+            forms = FormExtractor.parse(r.text)
+            if not forms:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Kein Formular bei Schritt {step + 1} gefunden (URL: {r.url})",
+                )
+
+            form   = forms[0]
+            fields = dict(form["fields"])
+            action = form["action"]
+            if not action.startswith("http"):
+                action = urljoin(str(r.url), action)
+
+            # Found SAML assertion → exit the loop and POST to ACS
+            if "SAMLResponse" in fields:
+                break
+
+            # Detect whether this step has a password field
+            pw_field   = next((k for k in fields if k.lower() in _PASSWORD_KEYS), None)
+            user_field = next((k for k in fields if k.lower() in _USERNAME_KEYS), None)
+
+            if pw_field:
+                # ── This is the actual login form — inject credentials ──
+                if user_field:
+                    fields[user_field] = username
+                else:
+                    fields["j_username"] = username   # fallback
+                fields[pw_field] = password
+            # else: intermediate step (local storage check etc.) — submit as-is
+
+            r = await client.post(
+                action, data=fields,
+                headers={**BROWSER_HEADERS,
+                         "Referer": str(r.url),
+                         "Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+            # After injecting credentials: if the response still shows a login
+            # form (no SAMLResponse), the credentials were likely wrong.
+            if pw_field:
+                next_forms = FormExtractor.parse(r.text)
+                has_saml   = any("SAMLResponse" in f["fields"] for f in next_forms)
+                has_pw     = any(
+                    any(k.lower() in _PASSWORD_KEYS for k in f["fields"])
+                    for f in next_forms
+                )
+                if not has_saml and has_pw:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Login fehlgeschlagen — Benutzername oder Passwort falsch.",
+                    )
+        else:
             raise HTTPException(
                 status_code=502,
-                detail=f"IDP-Login-Formular nicht gefunden. Aktuelle URL: {idp_login_url}",
+                detail="Login-Flow hat nach 6 Schritten kein SAML-Response geliefert.",
             )
 
-        login_form = forms[0]
-        action = login_form["action"]
-        if not action.startswith("http"):
-            action = urljoin(idp_login_url, action)
-
-        # ── 2. Inject credentials ─────────────────────────────────
-        # Preserve all hidden fields (CSRF / execution token etc.)
-        fields = dict(login_form["fields"])
-
-        # Detect username / password field names (Shibboleth IdP typically uses
-        # j_username / j_password, but handle other common variants)
-        _USERNAME_KEYS = {"j_username", "username", "user", "uid", "login", "name"}
-        _PASSWORD_KEYS = {"j_password", "password", "pass", "passwd", "pw"}
-
-        injected = {"username": False, "password": False}
-        for k in list(fields.keys()):
-            if k.lower() in _USERNAME_KEYS and not injected["username"]:
-                fields[k] = username
-                injected["username"] = True
-            elif k.lower() in _PASSWORD_KEYS and not injected["password"]:
-                fields[k] = password
-                injected["password"] = True
-
-        # If the form didn't have recognisable fields, add them anyway
-        # (some IDPs inject them dynamically but the form action still accepts them)
-        if not injected["username"]:
-            fields["j_username"] = username
-        if not injected["password"]:
-            fields["j_password"] = password
-
-        r2 = await client.post(
-            action, data=fields,
-            headers={**BROWSER_HEADERS, "Referer": idp_login_url,
-                     "Content-Type": "application/x-www-form-urlencoded"},
-        )
-
-        # ── 3. Detect outcome ─────────────────────────────────────
-        forms2 = FormExtractor.parse(r2.text)
-
-        # Look for the SAML assertion form (SAMLResponse hidden field)
+        # ── 3. POST SAMLResponse to SP ACS ────────────────────────────
         saml_form = next(
-            (f for f in forms2 if "SAMLResponse" in f["fields"]),
-            None
+            (f for f in FormExtractor.parse(r.text) if "SAMLResponse" in f["fields"]),
+            None,
         )
-
-        if saml_form is None:
-            # Might be wrong credentials — look for an error hint in the HTML
-            err_hint = ""
-            if "falsch" in r2.text.lower() or "incorrect" in r2.text.lower() \
-                    or "invalid" in r2.text.lower() or "error" in r2.text.lower():
-                err_hint = " (Benutzername oder Passwort falsch?)"
+        if not saml_form:
             raise HTTPException(
-                status_code=401,
-                detail=f"Login fehlgeschlagen — kein SAML-Response erhalten.{err_hint}",
+                status_code=502,
+                detail="SAML-Assertion-Formular nicht gefunden.",
             )
 
-        # ── 4. POST SAML assertion to SP ACS ──────────────────────
         acs_url = saml_form["action"]
         if not acs_url.startswith("http"):
-            acs_url = urljoin(str(r2.url), acs_url)
+            acs_url = urljoin(str(r.url), acs_url)
 
-        r3 = await client.post(
+        r_final = await client.post(
             acs_url, data=saml_form["fields"],
-            headers={**BROWSER_HEADERS, "Referer": str(r2.url),
+            headers={**BROWSER_HEADERS,
+                     "Referer": str(r.url),
                      "Content-Type": "application/x-www-form-urlencoded"},
         )
 
-        # ── 5. Extract cookies + Session/User from final URL ───────
-        final_url = str(r3.url)
-        all_cookies = client.cookies  # accumulated across all redirects
+        # ── 4. Extract cookies + Session/User from final URL ──────────
+        final_url   = str(r_final.url)
+        cookie_str  = cookies_to_str(client.cookies)
 
         session_m = re.search(r"[?&]Session=([^&#]+)", final_url)
         user_m    = re.search(r"[?&]User=([^&#]+)",    final_url)
-
-        session = session_m.group(1) if session_m else ""
-        user    = user_m.group(1)    if user_m    else ""
-
-        cookie_str = cookies_to_str(all_cookies)
+        session   = session_m.group(1) if session_m else ""
+        user      = user_m.group(1)    if user_m    else ""
 
         if not cookie_str:
             raise HTTPException(
                 status_code=502,
-                detail="Login scheinbar erfolgreich, aber keine Cookies erhalten.",
+                detail="Login erfolgreich, aber keine Cookies erhalten.",
             )
 
-        # ── 6. Try to auto-detect stgru ───────────────────────────
+        # ── 5. Best-effort stgru detection ────────────────────────────
         stgru = await detect_stgru(client, session, user, cookie_str)
 
-        return {
-            "cookies": cookie_str,
-            "session": session,
-            "user":    user,
-            "stgru":   stgru,   # may be "" if detection failed
-        }
+        return {"cookies": cookie_str, "session": session, "user": user, "stgru": stgru}
 
 
 async def detect_stgru(

@@ -8,9 +8,14 @@
 
 **Auto-login (Shibboleth SSO automation):**
 - Added `FormExtractor(HTMLParser)` — parses all `<form>` elements + input fields from HTML without external dependencies.
-- Added `/api/login` endpoint + `shibboleth_login()` async function: follows redirects to IDP → injects credentials into the login form (detects `j_username`/`j_password` and common variants) → POSTs SAML assertion to SP ACS → extracts final cookies + Session/User from the redirect URL.
+- Added `/api/login` endpoint + `shibboleth_login()` async function.
 - Added `detect_stgru()`: after login, fetches the Primuss main page and tries to regex-extract the stgru value so the user doesn't need to find it manually.
 - Frontend: `step-credentials` now has a tab bar — "✨ Automatisch" (username/password → pre-fills everything) vs "🔑 Manuell" (copy-paste cookies fallback).
+
+**Shibboleth multi-step login fix:**
+- Traced the real IDP flow: `e1s1` is a "local storage check" form (no credentials, submit as-is) → `e1s2` is the actual login form (`j_username`/`j_password`).
+- Previous code assumed the first form was the login form, injected credentials into the local storage check, which the IDP silently ignored → 401.
+- Fixed `shibboleth_login()` to loop through form steps generically: submit as-is until a password field is detected, then inject credentials. Handles up to 6 steps before giving up.
 
 ## 2026-03-03 — Initial build
 
