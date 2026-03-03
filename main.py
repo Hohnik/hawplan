@@ -3,6 +3,8 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from html.parser import HTMLParser
+from urllib.parse import urljoin
 import httpx
 import asyncio
 from io import BytesIO
@@ -20,30 +22,91 @@ app.add_middleware(
 )
 
 PRIMUSS_BASE = "https://www3.primuss.de/stpl/index.php"
-FH = "fhla"
-LANGUAGE = "de"
+FH           = "fhla"
+LANGUAGE     = "de"
 
-# ── Models ──────────────────────────────────────────────────────
+BROWSER_HEADERS = {
+    "User-Agent":      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+}
+
+# ── Models ───────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 class FetchRequest(BaseModel):
-    cookies: str          # "PHPSESSID=abc; _shibsession_xyz=def"
-    session: str          # Session= value from URL
-    user: str             # User= value from URL
-    stgru: str            # e.g. "165"
-    sem: str = "9"
-    date_from: str        # "YYYY-MM-DD"  — first Monday of semester
-    date_to: str          # "YYYY-MM-DD"  — last Friday of semester
-    timezone: str = "1"
-
+    cookies:   str          # "PHPSESSID=abc; _shibsession_xyz=def"
+    session:   str          # Session= value from URL
+    user:      str          # User= value from URL
+    stgru:     str          # e.g. "165"
+    sem:       str = "9"
+    date_from: str          # "YYYY-MM-DD"
+    date_to:   str          # "YYYY-MM-DD"
+    timezone:  str = "1"
 
 class IcsRequest(BaseModel):
     events: list[dict]
 
 
-# ── Helpers ─────────────────────────────────────────────────────
+# ── HTML form parser ──────────────────────────────────────────────
+
+class FormExtractor(HTMLParser):
+    """
+    Extract every <form> from an HTML page, including all input/select values.
+    Handles multi-form pages (e.g. SAML assertion pages).
+    """
+    def __init__(self):
+        super().__init__()
+        self.forms: list[dict] = []
+        self._cur: dict | None = None
+
+    def handle_starttag(self, tag: str, attrs):
+        a = dict(attrs)
+        if tag == "form":
+            self._cur = {
+                "action": a.get("action", ""),
+                "method": a.get("method", "post").upper(),
+                "fields": {},
+            }
+        elif tag == "input" and self._cur is not None:
+            name  = a.get("name")
+            itype = a.get("type", "text").lower()
+            if name and itype != "submit" and itype != "button":
+                self._cur["fields"][name] = a.get("value", "")
+        elif tag == "select" and self._cur is not None:
+            name = a.get("name")
+            if name:
+                self._cur["fields"][name] = ""   # filled by <option selected>
+        elif tag == "option" and self._cur is not None:
+            if "selected" in dict(attrs):
+                # find most recently added select field and set its value
+                # (simplistic but sufficient for SAML forms)
+                pass
+
+    def handle_endtag(self, tag: str):
+        if tag == "form" and self._cur is not None:
+            self.forms.append(self._cur)
+            self._cur = None
+
+    @classmethod
+    def parse(cls, html: str) -> list[dict]:
+        p = cls()
+        p.feed(html)
+        return p.forms
+
+
+# ── Cookie helpers ────────────────────────────────────────────────
 
 def parse_cookies(cookie_string: str) -> dict:
-    cookies = {}
+    """
+    Parse 'PHPSESSID=abc; _shibsession_xyz=def' → dict.
+    Strips \\r\\n line-wrapping that DevTools inserts for long cookie names.
+    """
+    cookie_string = re.sub(r"[\r\n]+[ \t]*", "", cookie_string).strip()
+    cookies: dict[str, str] = {}
     for part in cookie_string.split(";"):
         part = part.strip()
         if "=" in part:
@@ -51,52 +114,349 @@ def parse_cookies(cookie_string: str) -> dict:
             cookies[k.strip()] = v.strip()
     return cookies
 
+def cookies_to_str(jar: httpx.Cookies) -> str:
+    return "; ".join(f"{k}={v}" for k, v in jar.items())
+
+
+# ── Shibboleth auto-login ─────────────────────────────────────────
+
+async def shibboleth_login(username: str, password: str) -> dict:
+    """
+    Automate the full Shibboleth SSO flow for HS Landshut / Primuss.
+
+    Flow:
+      1. GET login_shibb.php  →  follows redirects to university IDP login form
+      2. Inject credentials into the form, POST to IDP
+      3. IDP returns an auto-submit form with SAMLResponse hidden field
+      4. POST SAMLResponse to the SP's ACS endpoint
+      5. SP sets _shibsession cookie, redirects to Primuss target URL
+      6. Extract final cookies + Session/User from the URL
+
+    Returns { cookies, session, user, stgru } or raises HTTPException.
+    """
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=30.0,
+        headers=BROWSER_HEADERS,
+    ) as client:
+
+        # ── 1. Reach IDP login page ───────────────────────────────
+        r1 = await client.get(
+            f"https://www3.primuss.de/stpl/login_shibb.php?FH={FH}&Language={LANGUAGE}"
+        )
+        idp_login_url = str(r1.url)
+
+        forms = FormExtractor.parse(r1.text)
+        if not forms:
+            raise HTTPException(
+                status_code=502,
+                detail=f"IDP-Login-Formular nicht gefunden. Aktuelle URL: {idp_login_url}",
+            )
+
+        login_form = forms[0]
+        action = login_form["action"]
+        if not action.startswith("http"):
+            action = urljoin(idp_login_url, action)
+
+        # ── 2. Inject credentials ─────────────────────────────────
+        # Preserve all hidden fields (CSRF / execution token etc.)
+        fields = dict(login_form["fields"])
+
+        # Detect username / password field names (Shibboleth IdP typically uses
+        # j_username / j_password, but handle other common variants)
+        _USERNAME_KEYS = {"j_username", "username", "user", "uid", "login", "name"}
+        _PASSWORD_KEYS = {"j_password", "password", "pass", "passwd", "pw"}
+
+        injected = {"username": False, "password": False}
+        for k in list(fields.keys()):
+            if k.lower() in _USERNAME_KEYS and not injected["username"]:
+                fields[k] = username
+                injected["username"] = True
+            elif k.lower() in _PASSWORD_KEYS and not injected["password"]:
+                fields[k] = password
+                injected["password"] = True
+
+        # If the form didn't have recognisable fields, add them anyway
+        # (some IDPs inject them dynamically but the form action still accepts them)
+        if not injected["username"]:
+            fields["j_username"] = username
+        if not injected["password"]:
+            fields["j_password"] = password
+
+        r2 = await client.post(
+            action, data=fields,
+            headers={**BROWSER_HEADERS, "Referer": idp_login_url,
+                     "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        # ── 3. Detect outcome ─────────────────────────────────────
+        forms2 = FormExtractor.parse(r2.text)
+
+        # Look for the SAML assertion form (SAMLResponse hidden field)
+        saml_form = next(
+            (f for f in forms2 if "SAMLResponse" in f["fields"]),
+            None
+        )
+
+        if saml_form is None:
+            # Might be wrong credentials — look for an error hint in the HTML
+            err_hint = ""
+            if "falsch" in r2.text.lower() or "incorrect" in r2.text.lower() \
+                    or "invalid" in r2.text.lower() or "error" in r2.text.lower():
+                err_hint = " (Benutzername oder Passwort falsch?)"
+            raise HTTPException(
+                status_code=401,
+                detail=f"Login fehlgeschlagen — kein SAML-Response erhalten.{err_hint}",
+            )
+
+        # ── 4. POST SAML assertion to SP ACS ──────────────────────
+        acs_url = saml_form["action"]
+        if not acs_url.startswith("http"):
+            acs_url = urljoin(str(r2.url), acs_url)
+
+        r3 = await client.post(
+            acs_url, data=saml_form["fields"],
+            headers={**BROWSER_HEADERS, "Referer": str(r2.url),
+                     "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        # ── 5. Extract cookies + Session/User from final URL ───────
+        final_url = str(r3.url)
+        all_cookies = client.cookies  # accumulated across all redirects
+
+        session_m = re.search(r"[?&]Session=([^&#]+)", final_url)
+        user_m    = re.search(r"[?&]User=([^&#]+)",    final_url)
+
+        session = session_m.group(1) if session_m else ""
+        user    = user_m.group(1)    if user_m    else ""
+
+        cookie_str = cookies_to_str(all_cookies)
+
+        if not cookie_str:
+            raise HTTPException(
+                status_code=502,
+                detail="Login scheinbar erfolgreich, aber keine Cookies erhalten.",
+            )
+
+        # ── 6. Try to auto-detect stgru ───────────────────────────
+        stgru = await detect_stgru(client, session, user, cookie_str)
+
+        return {
+            "cookies": cookie_str,
+            "session": session,
+            "user":    user,
+            "stgru":   stgru,   # may be "" if detection failed
+        }
+
+
+async def detect_stgru(
+    client: httpx.AsyncClient,
+    session: str,
+    user: str,
+    cookie_str: str,
+) -> str:
+    """
+    Best-effort: fetch the Primuss main page and extract stgru from the HTML/JS.
+    Returns "" if not found — user will need to enter it manually.
+    """
+    try:
+        r = await client.get(
+            f"https://www3.primuss.de/stpl/index.php"
+            f"?FH={FH}&Language={LANGUAGE}&Session={session}&User={user}",
+            headers=BROWSER_HEADERS,
+            timeout=10.0,
+        )
+        # stgru appears in the page as e.g. stgru=165 or "stgru":"165" or value="165"
+        # Try several patterns
+        for pat in (
+            r'stgru["\s]*[:=]["\s]*(\d+)',
+            r'name=["\']stgru["\'][^>]*value=["\'](\d+)["\']',
+            r'value=["\'](\d+)["\'][^>]*name=["\']stgru["\']',
+        ):
+            m = re.search(pat, r.text, re.IGNORECASE)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+# ── API Routes ────────────────────────────────────────────────────
+
+@app.post("/api/login")
+async def login(req: LoginRequest):
+    """
+    Automate Shibboleth SSO login.
+    Returns { cookies, session, user, stgru } ready to paste into the form.
+    """
+    result = await shibboleth_login(req.username, req.password)
+    return JSONResponse(result)
+
+
+@app.post("/api/fetch-all")
+async def fetch_all(req: FetchRequest):
+    """
+    Iterate every week in [date_from, date_to] and collect all Primuss events
+    for the given stgru.
+    """
+    cookies  = parse_cookies(req.cookies)
+    mondays  = list(week_mondays(req.date_from, req.date_to))
+
+    if not mondays:
+        raise HTTPException(status_code=400, detail="Kein gültiger Datumsbereich.")
+    if len(mondays) > 40:
+        raise HTTPException(status_code=400, detail="Datumsbereich zu groß (max. 40 Wochen).")
+
+    base_form = {
+        "viewtype": "week",
+        "timezone": req.timezone,
+        "Session":  req.session,
+        "User":     req.user,
+        "mode":     "calendar",
+        "stgru":    req.stgru,
+    }
+
+    async def fetch_week(client: httpx.AsyncClient, monday: date):
+        form = {**base_form, "showdate": primuss_date(monday)}
+        url  = f"{PRIMUSS_BASE}?FH={FH}&Language={LANGUAGE}&sem={req.sem}&method=list"
+        try:
+            r = await client.post(
+                url,
+                data=form,
+                cookies=cookies,
+                headers={
+                    "User-Agent":       BROWSER_HEADERS["User-Agent"],
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Accept":           "application/json, text/javascript, */*; q=0.01",
+                    "Origin":           "https://www3.primuss.de",
+                    "Referer":          f"https://www3.primuss.de/stpl/index.php?FH={FH}&Language={LANGUAGE}&Session={req.session}&User={req.user}",
+                    "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
+                },
+                timeout=15.0,
+            )
+        except httpx.TimeoutException:
+            return None, monday
+
+        if r.status_code in (301, 302):
+            return "redirect", monday
+        try:
+            return r.json(), monday
+        except Exception:
+            return {"_raw_text": r.text[:1000], "_status": r.status_code}, monday
+
+    all_events:  list[dict] = []
+    first_raw    = None
+    first_items  = None
+    had_redirect = False
+
+    semaphore = asyncio.Semaphore(3)
+
+    async def guarded(client, monday):
+        async with semaphore:
+            return await fetch_week(client, monday)
+
+    async with httpx.AsyncClient(follow_redirects=False) as client:
+        results = await asyncio.gather(*[guarded(client, m) for m in mondays])
+
+    for data, monday in results:
+        if data is None:
+            continue
+        if data == "redirect":
+            had_redirect = True
+            continue
+        if first_raw is None:
+            first_raw = data
+
+        items = extract_items(data)
+        if items:
+            if first_items is None:
+                first_items = items[:3]
+            for raw_ev in items:
+                ev = normalize_event(raw_ev)
+                if ev:
+                    all_events.append(ev)
+
+    if had_redirect and not all_events:
+        raise HTTPException(
+            status_code=401,
+            detail="Session abgelaufen oder ungültig. Bitte neu einloggen.",
+        )
+
+    return JSONResponse({
+        "events":       dedupe_events(all_events),
+        "count":        len(all_events),
+        "weeks":        len(mondays),
+        "_first_raw":   first_raw,
+        "_first_items": first_items,
+    })
+
+
+@app.post("/api/generate-ics")
+async def generate_ics(req: IcsRequest):
+    if not req.events:
+        raise HTTPException(status_code=400, detail="Keine Events übergeben.")
+
+    cal = Calendar()
+    cal.add("prodid",        "-//Stundenplan Generator//fhla//DE")
+    cal.add("version",       "2.0")
+    cal.add("calscale",      "GREGORIAN")
+    cal.add("method",        "PUBLISH")
+    cal.add("x-wr-calname",  "Stundenplan HS Landshut")
+    cal.add("x-wr-timezone", "Europe/Berlin")
+
+    def parse_dt(s: str) -> datetime:
+        s = s.replace("Z", "+00:00").strip()
+        try:
+            return datetime.fromisoformat(s)
+        except ValueError:
+            return datetime.fromisoformat(s[:19])
+
+    for ev in req.events:
+        ie = Event()
+        ie.add("summary", ev.get("summary", "Veranstaltung"))
+        ie.add("dtstart", parse_dt(ev["dtstart"]))
+        ie.add("dtend",   parse_dt(ev.get("dtend") or ev["dtstart"]))
+        ie.add("dtstamp", datetime.now(timezone.utc))
+        if ev.get("location"):
+            ie.add("location",    vText(ev["location"]))
+        if ev.get("description"):
+            ie.add("description", vText(ev["description"]))
+        uid = re.sub(r"\s+", "-", f"{ev.get('dtstart','')}-{ev.get('summary','')}-{FH}")
+        ie.add("uid", uid + "@stundenplan-gen")
+        cal.add_component(ie)
+
+    return StreamingResponse(
+        BytesIO(cal.to_ical()),
+        media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=stundenplan.ics"},
+    )
+
+
+# ── Data helpers ──────────────────────────────────────────────────
 
 def week_mondays(date_from: str, date_to: str):
-    """Yield the Monday of each week between date_from and date_to (inclusive)."""
-    start = date.fromisoformat(date_from)
-    end   = date.fromisoformat(date_to)
-    # rewind to Monday of start week
+    start   = date.fromisoformat(date_from)
+    end     = date.fromisoformat(date_to)
     current = start - timedelta(days=start.weekday())
     while current <= end:
         yield current
         current += timedelta(weeks=1)
 
-
 def primuss_date(d: date) -> str:
-    """Format date as M/D/YYYY (Primuss showdate format)."""
     return f"{d.month}/{d.day}/{d.year}"
 
-
 def dedupe_events(events: list[dict]) -> list[dict]:
-    """Deduplicate events by a stable key (name + dtstart)."""
-    seen = set()
-    result = []
+    seen, out = set(), []
     for ev in events:
         key = (ev.get("summary", ""), ev.get("dtstart", ""))
         if key not in seen:
             seen.add(key)
-            result.append(ev)
-    return result
+            out.append(ev)
+    return out
 
-
-def normalize_event(raw: dict) -> dict | None:
-    """
-    Convert a raw Primuss event dict into our internal shape.
-    Returns None if the event doesn't have enough data to be useful.
-
-    Primuss field names observed in the wild (vary by server version):
-      Name / name / LVName / Bezeichnung / Veranstaltung / title
-      Dozent / dozent / DozentName / Lehrer
-      Raum / raum / Room / room / Ort
-      Art / art / Typ / typ
-      datum / Datum / Date / StartDate
-      Anfang / anfang / StartTime / Von / start / dtstart
-      Ende / ende / EndTime / Bis / end / dtend
-    """
-
+def normalize_event(raw) -> dict | None:
     if not isinstance(raw, dict):
-        return None   # skip nested lists / scalars that slip through extract_items
+        return None
 
     def get(*keys):
         for k in keys:
@@ -112,36 +472,24 @@ def normalize_event(raw: dict) -> dict | None:
 
     date_str  = get("datum", "Datum", "Date", "StartDate", "date")
     time_from = get("Anfang", "anfang", "StartTime", "Von", "von", "start", "dtstart")
-    time_to   = get("Ende", "ende", "EndTime", "Bis", "bis", "end", "dtend")
+    time_to   = get("Ende",   "ende",   "EndTime",   "Bis", "bis", "end",   "dtend")
 
-    # Try to build ISO datetimes
     def build_iso(d: str, t: str) -> str | None:
         if not d:
             return None
         d = d.strip()
         t = (t or "00:00").strip()
-        # Normalise date: MM/DD/YYYY → YYYY-MM-DD
         if re.match(r"\d{1,2}/\d{1,2}/\d{4}", d):
-            parts = d.split("/")
-            d = f"{parts[2]}-{int(parts[0]):02d}-{int(parts[1]):02d}"
-        # Normalise time: might be "8:00" → "08:00"
+            p = d.split("/")
+            d = f"{p[2]}-{int(p[0]):02d}-{int(p[1]):02d}"
         if re.match(r"^\d:\d{2}$", t):
             t = "0" + t
-        # Strip seconds if present
         if re.match(r"^\d{2}:\d{2}:\d{2}$", t):
             t = t[:5]
         return f"{d}T{t}:00"
 
-    dtstart = (
-        raw.get("dtstart")
-        or raw.get("start")
-        or build_iso(date_str, time_from)
-    )
-    dtend = (
-        raw.get("dtend")
-        or raw.get("end")
-        or build_iso(date_str, time_to)
-    )
+    dtstart = raw.get("dtstart") or raw.get("start") or build_iso(date_str, time_from)
+    dtend   = raw.get("dtend")   or raw.get("end")   or build_iso(date_str, time_to)
 
     if not dtstart:
         return None
@@ -152,25 +500,20 @@ def normalize_event(raw: dict) -> dict | None:
         "dtend":       str(dtend) if dtend else str(dtstart),
         "location":    get("Raum", "raum", "Room", "room", "Ort", "location"),
         "description": "\n".join(filter(None, [
-            get("Dozent", "dozent", "DozentName", "Lehrer", "lecturer") and
+            get("Dozent","dozent","DozentName","Lehrer","lecturer") and
                 f"Dozent: {get('Dozent','dozent','DozentName','Lehrer','lecturer')}",
-            get("Art", "art", "Typ", "typ", "type") and
+            get("Art","art","Typ","typ","type") and
                 f"Art: {get('Art','art','Typ','typ','type')}",
         ])),
-        "_raw": raw,   # keep original for the debug panel
+        "_raw": raw,
     }
 
-
 def extract_items(data) -> list | None:
-    """
-    Extract a flat list of items from any Primuss response shape, including
-    nested lists like [[ev, ev], [ev]] or dicts wrapping a list.
-    """
     if isinstance(data, list):
         flat = []
         for item in data:
             if isinstance(item, list):
-                flat.extend(item)   # flatten one level: [[a,b],[c]] → [a,b,c]
+                flat.extend(item)
             else:
                 flat.append(item)
         return flat or None
@@ -179,158 +522,8 @@ def extract_items(data) -> list | None:
                     "veranstaltungen", "termine", "stundenplan"):
             v = data.get(key)
             if isinstance(v, list):
-                return extract_items(v)   # recurse to handle nested lists in values
+                return extract_items(v)
     return None
-
-
-# ── API Routes ───────────────────────────────────────────────────
-
-@app.post("/api/fetch-all")
-async def fetch_all(req: FetchRequest):
-    """
-    Iterate over every week in [date_from, date_to] and collect all events
-    from Primuss for the given stgru (Studiengruppe).
-    """
-    cookies = parse_cookies(req.cookies)
-    mondays = list(week_mondays(req.date_from, req.date_to))
-
-    if not mondays:
-        raise HTTPException(status_code=400, detail="Kein gültiger Datumsbereich.")
-    if len(mondays) > 40:
-        raise HTTPException(status_code=400, detail="Datumsbereich zu groß (max. 40 Wochen).")
-
-    base_form = {
-        "viewtype":  "week",
-        "timezone":  req.timezone,
-        "Session":   req.session,
-        "User":      req.user,
-        "mode":      "calendar",
-        "stgru":     req.stgru,
-    }
-
-    async def fetch_week(client: httpx.AsyncClient, monday: date):
-        form = {**base_form, "showdate": primuss_date(monday)}
-        url  = f"{PRIMUSS_BASE}?FH={FH}&Language={LANGUAGE}&sem={req.sem}&method=list"
-        try:
-            r = await client.post(
-                url,
-                data=form,
-                cookies=cookies,
-                headers={
-                    "User-Agent":      "Mozilla/5.0 (compatible; stundenplan-generator)",
-                    "X-Requested-With":"XMLHttpRequest",
-                    "Accept":          "application/json, text/javascript, */*; q=0.01",
-                    "Origin":          "https://www3.primuss.de",
-                    "Referer":         f"https://www3.primuss.de/stpl/index.php?FH={FH}&Language={LANGUAGE}&Session={req.session}&User={req.user}",
-                    "Content-Type":    "application/x-www-form-urlencoded; charset=UTF-8",
-                },
-                timeout=15.0,
-            )
-        except httpx.TimeoutException:
-            return None, monday
-
-        if r.status_code in (301, 302):
-            return "redirect", monday
-        try:
-            return r.json(), monday
-        except Exception:
-            return {"_raw_text": r.text[:1000], "_status": r.status_code}, monday
-
-    all_events:  list[dict] = []
-    first_raw    = None   # full first-week API response (for debug panel)
-    first_items  = None   # raw items from first week before normalisation
-    had_redirect = False
-
-    # Fire requests with a small concurrency limit (be polite to the server)
-    sem = asyncio.Semaphore(3)
-
-    async def guarded_fetch(client, monday):
-        async with sem:
-            return await fetch_week(client, monday)
-
-    async with httpx.AsyncClient(follow_redirects=False) as client:
-        tasks   = [guarded_fetch(client, m) for m in mondays]
-        results = await asyncio.gather(*tasks)
-
-    for data, monday in results:
-        if data is None:
-            continue
-        if data == "redirect":
-            had_redirect = True
-            continue
-        if first_raw is None:
-            first_raw = data
-
-        items = extract_items(data)
-        if items:
-            if first_items is None:
-                first_items = items[:3]   # first 3 raw items for the debug panel
-            for raw_ev in items:
-                ev = normalize_event(raw_ev)
-                if ev:
-                    all_events.append(ev)
-
-    if had_redirect and not all_events:
-        raise HTTPException(
-            status_code=401,
-            detail="Session abgelaufen oder ungültig. Bitte Cookies und Session neu kopieren.",
-        )
-
-    all_events = dedupe_events(all_events)
-
-    return JSONResponse({
-        "events":      all_events,
-        "count":       len(all_events),
-        "weeks":       len(mondays),
-        "_first_raw":  first_raw,    # full first-week response (debug)
-        "_first_items": first_items, # first 3 raw items before normalisation (debug)
-    })
-
-
-@app.post("/api/generate-ics")
-async def generate_ics(req: IcsRequest):
-    """Generate and return a .ics file from a list of events."""
-    if not req.events:
-        raise HTTPException(status_code=400, detail="Keine Events übergeben.")
-
-    cal = Calendar()
-    cal.add("prodid",       "-//Stundenplan Generator//fhla//DE")
-    cal.add("version",      "2.0")
-    cal.add("calscale",     "GREGORIAN")
-    cal.add("method",       "PUBLISH")
-    cal.add("x-wr-calname", "Stundenplan HS Landshut")
-    cal.add("x-wr-timezone","Europe/Berlin")
-
-    def parse_dt(s: str) -> datetime:
-        s = s.replace("Z", "+00:00").strip()
-        # Handle "YYYY-MM-DDTHH:MM:SS" without tz → assume CET (naive, ical-generator handles VTIMEZONE)
-        try:
-            return datetime.fromisoformat(s)
-        except ValueError:
-            return datetime.fromisoformat(s[:19])
-
-    for ev in req.events:
-        ie = Event()
-        ie.add("summary",  ev.get("summary", "Veranstaltung"))
-        ie.add("dtstart",  parse_dt(ev["dtstart"]))
-        ie.add("dtend",    parse_dt(ev.get("dtend") or ev["dtstart"]))
-        ie.add("dtstamp",  datetime.now(timezone.utc))
-
-        if ev.get("location"):
-            ie.add("location", vText(ev["location"]))
-        if ev.get("description"):
-            ie.add("description", vText(ev["description"]))
-
-        uid_raw = f"{ev.get('dtstart','')}-{ev.get('summary','')}-{FH}"
-        ie.add("uid", re.sub(r"\s+", "-", uid_raw) + "@stundenplan-gen")
-
-        cal.add_component(ie)
-
-    return StreamingResponse(
-        BytesIO(cal.to_ical()),
-        media_type="text/calendar",
-        headers={"Content-Disposition": "attachment; filename=stundenplan.ics"},
-    )
 
 
 # Static frontend — must be last

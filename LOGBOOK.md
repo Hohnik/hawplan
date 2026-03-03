@@ -1,5 +1,17 @@
 # Logbook
 
+## 2026-03-03 — Auto-login + cookie bug fixes
+
+**Bugs fixed:**
+- `parse_cookies`: DevTools wraps long cookie names with `\n ` when you copy them. The shibboleth session cookie name is 90+ chars, always gets wrapped. Fixed with `re.sub(r"[\r\n]+[ \t]*", "", ...)` before parsing — rejoins the split key correctly.
+- Previous `normalize_event` / `extract_items` crash on `list` items (Primuss returns `[[ev,ev],[ev]]`) — fixed in prior commit.
+
+**Auto-login (Shibboleth SSO automation):**
+- Added `FormExtractor(HTMLParser)` — parses all `<form>` elements + input fields from HTML without external dependencies.
+- Added `/api/login` endpoint + `shibboleth_login()` async function: follows redirects to IDP → injects credentials into the login form (detects `j_username`/`j_password` and common variants) → POSTs SAML assertion to SP ACS → extracts final cookies + Session/User from the redirect URL.
+- Added `detect_stgru()`: after login, fetches the Primuss main page and tries to regex-extract the stgru value so the user doesn't need to find it manually.
+- Frontend: `step-credentials` now has a tab bar — "✨ Automatisch" (username/password → pre-fills everything) vs "🔑 Manuell" (copy-paste cookies fallback).
+
 ## 2026-03-03 — Initial build
 
 **Decisions:**
