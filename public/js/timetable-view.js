@@ -85,9 +85,28 @@ export class TimetableView extends LitElement {
       width: 8px; height: 8px; border-radius: 50%;
       flex-shrink: 0; margin-top: 5px;
     }
-    .c-name { font-weight: 600; font-size: 0.84rem; }
+    .c-name { font-weight: 600; font-size: 0.84rem; display: flex; align-items: center; gap: 0.4rem; }
     .c-meta { color: var(--muted); font-size: 0.72rem; margin-top: 1px; line-height: 1.5; }
     .c-count { margin-left: auto; font-size: 0.7rem; color: var(--muted); white-space: nowrap; padding-top: 2px; }
+
+    .c-info {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--border); color: var(--muted);
+      font-size: 0.58rem; font-weight: 700; cursor: help;
+      flex-shrink: 0; position: relative;
+    }
+    .c-info:hover { background: var(--accent-bg); color: var(--accent); }
+    .c-tooltip {
+      display: none; position: absolute; bottom: calc(100% + 6px); left: 50%;
+      transform: translateX(-50%); width: max-content; max-width: 280px;
+      background: var(--surface-2, #21263a); color: var(--text);
+      border: 1px solid var(--border-2); border-radius: 6px;
+      padding: 0.5rem 0.7rem; font-size: 0.72rem; font-weight: 400;
+      line-height: 1.5; z-index: 10; pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .c-info:hover .c-tooltip { display: block; }
 
     /* ── Preview label ────────────────────── */
     .section-label {
@@ -192,10 +211,15 @@ export class TimetableView extends LitElement {
       const name = (ev.summary || '').trim();
       if (!name) continue;
 
-      if (!map.has(name)) {
-        map.set(name, {
-          id: `${group.stgru}::${name}`,
+      // Group by lv_id (unique lecture), fall back to summary
+      const key = ev.lv_id || name;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          id: `${group.stgru}::${key}`,
           summary: name,
+          fullName: ev.fach_name || '',
+          lvId: ev.lv_id || '',
           groupLabel: group.label,
           slots: [],
           events: [],
@@ -204,7 +228,7 @@ export class TimetableView extends LitElement {
         });
       }
 
-      const course = map.get(name);
+      const course = map.get(key);
       course.events.push(ev);
 
       try {
@@ -212,10 +236,10 @@ export class TimetableView extends LitElement {
         const day = d.getDay();
         const start = ev.dtstart.slice(11, 16);
         const end = (ev.dtend || ev.dtstart).slice(11, 16);
-        const key = `${day}-${start}-${end}`;
+        const key2 = `${day}-${start}-${end}`;
 
-        if (!course.slots.some(s => s.key === key)) {
-          course.slots.push({ key, day, start, end, room: ev.location || '' });
+        if (!course.slots.some(s => s.key === key2)) {
+          course.slots.push({ key: key2, day, start, end, room: ev.location || '' });
         }
       } catch {}
 
@@ -401,7 +425,19 @@ export class TimetableView extends LitElement {
                        @click=${e => e.stopPropagation()}
                        @change=${() => this._toggle(c.id)} />
                 <div style="flex:1;min-width:0">
-                  <div class="c-name">${c.summary}</div>
+                  <div class="c-name">
+                    ${c.summary}
+                    ${c.fullName ? html`
+                      <span class="c-info" @click=${e => e.stopPropagation()}>i
+                        <span class="c-tooltip">
+                          <strong>${c.fullName}</strong>
+                          ${c.lvId ? html`<br>LV-ID: ${c.lvId}` : ''}
+                          ${c.lecturer ? html`<br>Dozent: ${c.lecturer}` : ''}
+                          ${c.rooms.size ? html`<br>Raum: ${[...c.rooms].join(', ')}` : ''}
+                        </span>
+                      </span>
+                    ` : ''}
+                  </div>
                   <div class="c-meta">
                     ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
                   </div>

@@ -350,7 +350,7 @@ def _parse_course_groups(html: str) -> list[dict]:
     return groups
 
 def normalize_event(raw) -> dict | None:
-    """Convert Primuss event list → clean dict."""
+    """Convert Primuss event list → clean dict with metadata for grouping."""
     if not isinstance(raw, list) or len(raw) < 4:
         return None
 
@@ -381,6 +381,11 @@ def normalize_event(raw) -> dict | None:
         "dtend":       dtend or dtstart,
         "location":    room,
         "description": "\n".join(desc_parts),
+        # Metadata for frontend grouping & disambiguation
+        "lv_id":       str(meta.get("lv_id", "")),
+        "fach_name":   meta.get("fach_name", ""),
+        "fach_id":     str(meta.get("fach_id", "")),
+        "rhythmus":    str(meta.get("rhythmus", "")),
     }
 
 def dedupe(events: list[dict]) -> list[dict]:

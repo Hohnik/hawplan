@@ -1,16 +1,16 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 
 const DAYS  = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
-const START  = 8;   // 08:00
-const END    = 20;  // 20:00
+const START  = 8;
+const END    = 20;
 const HOURS  = END - START;
-const QROWS  = HOURS * 4;  // 48 quarter-hour rows
+const QROWS  = HOURS * 4;
 
 /**
  * <week-grid .slots=${[...]}></week-grid>
  *
  * Each slot: { day: 1–5, start: 'HH:MM', end: 'HH:MM', label, color, room }
- * Pure presentational — no state, no events.
+ * Handles overlapping slots by subdividing them side-by-side.
  */
 export class WeekGrid extends LitElement {
   static properties = {
@@ -31,7 +31,6 @@ export class WeekGrid extends LitElement {
       background: var(--bg, #0f1117);
     }
 
-    /* Header */
     .corner { grid-column: 1; grid-row: 1; background: var(--surface-2, #21263a); }
     .day-hdr {
       grid-row: 1;
@@ -42,7 +41,6 @@ export class WeekGrid extends LitElement {
       border-left: 1px solid var(--border, #2a2d3e);
     }
 
-    /* Time labels */
     .time {
       grid-column: 1;
       display: flex; align-items: flex-start; justify-content: flex-end;
@@ -51,24 +49,28 @@ export class WeekGrid extends LitElement {
       font-size: 0.6rem; line-height: 1;
     }
 
-    /* Hour lines */
     .hline {
       grid-column: 2 / -1;
       border-top: 1px solid var(--border, #2a2d3e);
       pointer-events: none;
     }
 
-    /* Event blocks */
+    /* Day column container for overlap handling */
+    .day-col {
+      position: relative;
+      grid-row: 2 / -1;
+      border-left: 1px solid var(--border, #2a2d3e);
+    }
+
     .ev {
+      position: absolute;
       border-radius: 4px;
-      padding: 2px 5px;
-      margin: 0 2px;
+      padding: 2px 4px;
       overflow: hidden;
       font-size: 0.66rem;
       line-height: 1.3;
       cursor: default;
-      z-index: 1;
-      min-height: 0;
+      box-sizing: border-box;
     }
     .ev-label {
       font-weight: 600;
@@ -99,15 +101,72 @@ export class WeekGrid extends LitElement {
     this.slots = [];
   }
 
-  /** 'HH:MM' → grid row number (1-based, row 1 = header, row 2 = first quarter). */
+  /** 'HH:MM' → minutes since START hour. */
+  _toMin(time) {
+    const [h, m] = time.split(':').map(Number);
+    return (h - START) * 60 + m;
+  }
+
+  /** 'HH:MM' → grid row (for time labels / hlines only). */
   _row(time) {
     const [h, m] = time.split(':').map(Number);
     return (h - START) * 4 + Math.floor(m / 15) + 2;
   }
 
+  /**
+   * Compute overlap groups for a single day's slots.
+   * Returns each slot with { left, width } as fractions (0–1).
+   */
+  _layoutDay(daySlots) {
+    if (!daySlots.length) return [];
+
+    // Sort by start, then by duration descending (longer first)
+    const items = daySlots.map(s => ({
+      ...s,
+      startMin: this._toMin(s.start),
+      endMin:   this._toMin(s.end),
+    })).sort((a, b) => a.startMin - b.startMin || (b.endMin - b.startMin) - (a.endMin - a.startMin));
+
+    // Greedy column assignment
+    const columns = []; // each column = array of {endMin}
+    const assigned = []; // parallel to items: column index
+
+    for (const item of items) {
+      let col = columns.findIndex(c => c[c.length - 1].endMin <= item.startMin);
+      if (col === -1) {
+        col = columns.length;
+        columns.push([]);
+      }
+      columns[col].push(item);
+      assigned.push(col);
+    }
+
+    // Now find max overlap for each item to determine width
+    const totalCols = columns.length;
+    return items.map((item, i) => ({
+      ...item,
+      left:  assigned[i] / totalCols,
+      width: 1 / totalCols,
+    }));
+  }
+
   render() {
     const slots = (this.slots || []).filter(s => s.day >= 1 && s.day <= 5);
     const hours = Array.from({ length: HOURS }, (_, i) => START + i);
+    const totalHeight = QROWS * 11; // px
+
+    // Group slots by day
+    const byDay = new Map();
+    for (const s of slots) {
+      if (!byDay.has(s.day)) byDay.set(s.day, []);
+      byDay.get(s.day).push(s);
+    }
+
+    // Layout each day with overlap handling
+    const laidOut = new Map();
+    for (const [day, daySlots] of byDay) {
+      laidOut.set(day, this._layoutDay(daySlots));
+    }
 
     return html`<div class="grid">
       <div class="corner"></div>
@@ -122,20 +181,26 @@ export class WeekGrid extends LitElement {
 
       ${slots.length === 0 ? html`<div class="empty-msg">Kurse auswählen…</div>` : ''}
 
-      ${slots.map(s => {
-        const rowS = this._row(s.start);
-        const rowE = this._row(s.end);
-        if (rowE <= rowS) return '';
-        return html`
-          <div class="ev"
-               style="grid-column:${s.day + 1}; grid-row:${rowS}/${rowE};
-                      background:${s.color}20; border-left:3px solid ${s.color};
-                      color:${s.color};"
-               title="${s.label}\n${s.start}–${s.end}${s.room ? '\n📍 ' + s.room : ''}">
-            <span class="ev-label">${s.label}</span>
-            ${(rowE - rowS >= 4 && s.room) ? html`<span class="ev-room">${s.room}</span>` : ''}
-          </div>`;
-      })}
+      ${[1,2,3,4,5].map(day => html`
+        <div class="day-col" style="grid-column:${day + 1}">
+          ${(laidOut.get(day) || []).map(s => {
+            const top  = (s.startMin / (HOURS * 60)) * totalHeight;
+            const h    = ((s.endMin - s.startMin) / (HOURS * 60)) * totalHeight;
+            const left  = s.left * 100;
+            const width = s.width * 100;
+            const tall  = h > 40;
+            return html`
+              <div class="ev"
+                   style="top:${top}px; height:${h}px; left:${left}%; width:calc(${width}% - 3px);
+                          background:${s.color}20; border-left:3px solid ${s.color};
+                          color:${s.color};"
+                   title="${s.label}\n${s.start}–${s.end}${s.room ? '\n📍 ' + s.room : ''}">
+                <span class="ev-label">${s.label}</span>
+                ${tall && s.room ? html`<span class="ev-room">${s.room}</span>` : ''}
+              </div>`;
+          })}
+        </div>
+      `)}
     </div>`;
   }
 }
