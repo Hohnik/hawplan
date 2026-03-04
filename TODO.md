@@ -7,28 +7,29 @@
 - [x] ICS generation with stable UIDs
 - [x] Auto-detect current semester dates
 - [x] .env credentials (USERNAME, PASSWORD, TOTP_SECRET)
-- [x] Event grouping into courses (341 events → 14 courses for IF4)
+- [x] Event grouping into courses
 - [x] Multi-group selection (load from multiple study groups)
 - [x] Visual week preview grid (<week-grid> component)
 - [x] Faculty → Degree → Program tree from Primuss HTML
 - [x] Full course names — fach_name shown as primary, fach_kurzform as tag
-- [x] Default to no selection — users opt-in to courses
-- [x] Design polish — better contrast, spacing, sizing, consistent tokens
 - [x] Server-side session — auto-login, auto-refresh, no login page
 - [x] Cluster-based week grid — only overlapping events share column width
 - [x] Saturday column — auto-shown when Saturday events exist
 - [x] Even/odd week grids — biweekly courses shown in separate KW grids
-- [x] Conflict marking — dashed red outline + ⚠ badge on overlapping events
+- [x] Conflict marking — dashed outline on overlapping events
 - [x] Rich hover tooltips — lecturer, rhythm, event count, week numbers
-- [x] Expandable course cards — click ▾ to see individual event dates
+- [x] Clickable grid events → detail panel with individual dates
+- [x] Pencil design alignment — solid fill events, English day headers, JetBrains Mono + Geist
+- [x] Component extraction — course-picker, schedule-list, week-grid, helpers
+- [x] Desktop split panel layout (400px left + flex right)
+- [x] Mobile responsive — Courses/Schedule tab switcher
+- [x] Conflict detection — dynamic "✓ No time conflicts" / "⚠ N conflicts" in bottom bar
 
 ## Next
 - [ ] Test ICS import in Google Calendar / Apple Calendar
 - [ ] Test with multiple groups loaded simultaneously
+- [ ] localStorage persistence — remember last-used study groups + selections
 
 ## Further Considerations
-- [ ] Remember last-used study groups in localStorage
 - [ ] Course search within loaded groups (not just group search)
-- [ ] Mobile: responsive card layout, touch-friendly chip sizes
-- [ ] Persist course selection in localStorage across sessions
-- [ ] Show semester date range in UI header
+- [ ] Show semester date range dynamically in header

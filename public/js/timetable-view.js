@@ -1,215 +1,162 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 import { shared } from './shared-styles.js';
+import { colorOf, DAY_NAMES, fmtDate, groupEvents, countConflicts } from './helpers.js';
 import './week-grid.js';
+import './schedule-list.js';
+import './course-picker.js';
 
-const PALETTE = [
-  '#6c8cff','#ff6b9d','#56d364','#f0c541','#c084fc',
-  '#fb923c','#22d3ee','#f87171','#a3e635','#e879f9',
-  '#2dd4bf','#fbbf24','#818cf8','#fb7185','#34d399',
-];
-function colorOf(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return PALETTE[Math.abs(h) % PALETTE.length];
-}
-const DAY = ['So','Mo','Di','Mi','Do','Fr','Sa'];
-
-/** ISO week number */
-function isoWeek(d) {
-  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
-  const y = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-  return Math.ceil(((t - y) / 86400000 + 1) / 7);
-}
-
-/** Format DD.MM. */
-function fmtDate(s) {
-  const d = new Date(s);
-  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.`;
-}
-
-/**
- * <timetable-view>
- * Self-initializing: fetches course tree on mount, then lets user
- * pick groups → select courses → preview → download ICS.
- */
 export class TimetableView extends LitElement {
   static properties = {
     _courseTree:    { state: true },
     _initError:    { state: true },
     _loading:      { state: true },
     _query:        { state: true },
-    _open:         { state: true },   // Set<string> — expanded accordion keys
-    _loaded:       { state: true },   // Map<stgru, { label, courses[] }>
+    _loaded:       { state: true },
     _loadingStgru: { state: true },
-    _selected:     { state: true },   // Set<courseId>
-    _detailCourseId: { state: true }, // courseId shown in detail panel
+    _selected:     { state: true },
+    _detailCourseId: { state: true },
     _error:        { state: true },
     _downloading:  { state: true },
     _done:         { state: true },
+    _mobileTab:    { state: true },
   };
 
   static styles = [shared, css`
-    .center {
-      display: flex; flex-direction: column; align-items: center;
-      gap: 0.75rem; padding: 2rem 0;
-    }
-    .big-spinner {
-      width: 28px; height: 28px; border-width: 3px;
-      border-color: rgba(108,140,255,0.2); border-top-color: var(--accent);
-    }
+    :host { display: flex; height: 100vh; background: var(--bg); }
 
-    /* ── Tree accordion ───────────────── */
-    .tree {
+    /* ═══ Desktop split ═════════════════════ */
+    .left-panel {
+      width: 400px; min-width: 400px;
+      display: flex; flex-direction: column;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      height: 100vh; overflow: hidden;
+    }
+    .right-panel {
+      flex: 1; display: flex; flex-direction: column;
+      height: 100vh; overflow: hidden;
+    }
+    .left-hdr {
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 20px 24px 12px;
+    }
+    .app-title {
+      font-family: var(--mono); font-size: 11px; font-weight: 600;
+      letter-spacing: 3px; color: var(--text);
+    }
+    .app-sub { font-size: 14px; color: var(--muted); }
+    .search-wrap { padding: 0 24px 8px; }
+    .search-wrap input {
+      width: 100%; background: var(--bg);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      max-height: 340px; overflow-y: auto;
+      color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
     }
-    .tree::-webkit-scrollbar { width: 4px; }
-    .tree::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+    .search-wrap input:focus { border-color: var(--primary); }
+    .search-wrap input::placeholder { color: var(--muted); opacity: 0.6; }
+    .course-scroll { flex: 1; overflow-y: auto; }
+    .course-scroll::-webkit-scrollbar { width: 4px; }
+    .course-scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
 
-    .row-fac, .row-deg, .row-prog {
-      display: flex; align-items: center; gap: 0.45rem;
-      cursor: pointer; transition: background 0.1s;
+    /* ── Right header ────────────────────── */
+    .right-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 20px 32px;
       border-bottom: 1px solid var(--border);
     }
-    .row-fac:hover, .row-deg:hover, .row-prog:hover { background: var(--surface-2); }
-    .tree > :last-child { border-bottom: none; }
-    .row-fac  { padding: 0.5rem 0.75rem; font-size: 0.86rem; font-weight: 600; }
-    .row-deg  { padding: 0.4rem 0.75rem 0.4rem 1.5rem; font-size: 0.8rem; color: var(--muted); font-weight: 600; }
-    .row-prog { padding: 0.35rem 0.75rem 0.35rem 2.25rem; font-size: 0.8rem; }
-    .arrow { color: var(--muted); font-size: 0.55em; width: 0.8em; flex-shrink: 0; }
-    .prog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .count { font-size: 0.72rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+    .sched-title {
+      font-family: var(--mono); font-size: 11px; font-weight: 600;
+      letter-spacing: 3px;
+    }
+    .sem-label { font-size: 13px; color: var(--muted); }
+    .legend { display: flex; align-items: center; gap: 16px; }
+    .leg-item {
+      display: flex; align-items: center; gap: 5px;
+      font-family: var(--mono); font-size: 10px; font-weight: 500;
+      color: var(--muted); letter-spacing: 0.3px;
+    }
+    .leg-dot { width: 8px; height: 8px; border-radius: 2px; }
+    .timetable-wrap { flex: 1; overflow: auto; padding: 0 32px 32px; }
 
-    .chips-row {
-      display: flex; flex-wrap: wrap; gap: 0.3rem;
-      padding: 0.35rem 0.75rem 0.45rem 3rem;
-      background: var(--bg); border-bottom: 1px solid var(--border);
+    /* ── Bottom bar ──────────────────────── */
+    .bottom-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 16px 24px;
+      background: var(--surface); border-top: 1px solid var(--border);
     }
-
-    /* ── Chips ─────────────────────────── */
-    .loaded-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
-    .loaded-label { font-size: 0.78rem; font-weight: 600; color: var(--muted); }
-
-    .chip {
-      padding: 0.22rem 0.55rem; font-size: 0.74rem;
-      border-radius: 99px; border: 1px solid var(--border);
-      background: var(--bg); color: var(--muted);
-      cursor: pointer; transition: all 0.12s;
-      display: inline-flex; align-items: center; gap: 0.2rem;
-    }
-    .chip:hover { border-color: var(--accent); color: var(--text); }
-    .chip.active {
-      background: var(--accent-bg); border-color: var(--accent);
-      color: var(--accent); font-weight: 600;
-    }
-    .chip.loading { opacity: 0.5; pointer-events: none; }
-    .chip .x { font-size: 0.55rem; opacity: 0.6; }
-    .chip .x:hover { opacity: 1; }
-
-    /* ── Course list ───────────────────── */
-    .courses {
-      display: flex; flex-direction: column; gap: 0.3rem;
-      max-height: 460px; overflow-y: auto; padding-right: 2px;
-    }
-    .courses::-webkit-scrollbar { width: 4px; }
-    .courses::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
-
-    .grp-hdr {
-      display: flex; align-items: center; gap: 0.5rem;
-      font-size: 0.75rem; font-weight: 600; color: var(--muted);
-      text-transform: uppercase; letter-spacing: 0.03em;
-      margin-top: 0.5rem; padding-bottom: 0.2rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .grp-hdr span:first-child { flex: 1; }
-
-    .course {
-      display: flex; align-items: flex-start; gap: 0.55rem;
-      padding: 0.55rem 0.75rem;
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      cursor: pointer; transition: border-color 0.12s;
-      user-select: none; flex-wrap: wrap;
-    }
-    .course:hover { border-color: var(--border-2); }
-    .course.on { border-color: var(--accent); background: var(--accent-bg); }
-    .course input[type='checkbox'] {
-      margin-top: 3px; accent-color: var(--accent);
-      pointer-events: none; width: auto; flex-shrink: 0;
-    }
-    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
-
-    .c-name {
-      font-weight: 600; font-size: 0.86rem; line-height: 1.35;
-      display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap;
-    }
-    .c-tag {
-      font-size: 0.65rem; font-weight: 600;
-      padding: 0.08rem 0.35rem; border-radius: 4px;
-      background: var(--surface-2); color: var(--muted);
-      white-space: nowrap; letter-spacing: 0.02em;
-    }
-    .c-meta {
-      font-size: 0.76rem; color: var(--muted);
-      margin-top: 2px; line-height: 1.5;
-    }
-    .c-biweekly {
-      font-size: 0.65rem; font-weight: 600;
-      padding: 0.05rem 0.35rem; border-radius: 4px;
-      background: rgba(251,191,36,0.12); color: #fbbf24;
-      white-space: nowrap;
-    }
-    .c-count {
-      margin-left: auto; font-size: 0.72rem; color: var(--muted);
-      white-space: nowrap; flex-shrink: 0; padding-top: 3px;
+    .sel-info { display: flex; flex-direction: column; }
+    .sel-count { font-size: 14px; font-weight: 600; }
+    .sel-note {
+      font-family: var(--mono); font-size: 9px; font-weight: 500;
+      letter-spacing: 0.3px; display: flex; align-items: center; gap: 4px;
     }
 
-    /* ── Detail panel (below grid) ───── */
+    /* ── Detail panel ────────────────────── */
     .detail {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      padding: 0.65rem 0.85rem; background: var(--bg);
+      padding: 0.65rem 0.85rem; background: var(--bg); margin: 12px 0;
     }
-    .detail-hdr {
-      display: flex; align-items: center; gap: 0.45rem;
-      margin-bottom: 0.4rem;
-    }
-    .detail-hdr .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .detail-hdr { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.4rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .detail-name { font-weight: 600; font-size: 0.88rem; }
     .detail-tag {
       font-size: 0.65rem; font-weight: 600;
       padding: 0.08rem 0.35rem; border-radius: 4px;
       background: var(--surface-2); color: var(--muted);
     }
-    .detail-close {
-      margin-left: auto; cursor: pointer;
-      font-size: 0.72rem; color: var(--muted); opacity: 0.6;
-    }
+    .detail-close { margin-left: auto; cursor: pointer; font-size: 0.72rem; color: var(--muted); opacity: 0.6; }
     .detail-close:hover { opacity: 1; }
     .detail-meta { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.35rem; }
-    .detail-slot-hdr {
-      font-size: 0.72rem; font-weight: 600; color: var(--muted);
-      margin-top: 0.3rem; margin-bottom: 0.15rem;
-    }
-    .detail-dates {
-      font-size: 0.72rem; color: var(--muted); line-height: 1.7;
-      display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem;
-    }
+    .detail-slot-hdr { font-size: 0.72rem; font-weight: 600; color: var(--muted); margin-top: 0.3rem; }
+    .detail-dates { font-size: 0.72rem; color: var(--muted); line-height: 1.7; display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem; }
 
-    /* ── Grids section ─────────────────── */
+    /* ── Biweekly grids ──────────────────── */
     .grids { display: flex; flex-direction: column; gap: 0.75rem; }
     .grid-label {
-      font-size: 0.78rem; font-weight: 600; color: var(--muted);
-      display: flex; align-items: center; gap: 0.4rem;
+      font-family: var(--mono); font-size: 11px; font-weight: 600;
+      color: var(--muted); letter-spacing: 0.05em; padding: 8px 0 4px;
     }
 
-    /* ── Footer / Done ─────────────────── */
-    .foot { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
-    .stats { font-size: 0.82rem; color: var(--muted); flex: 1; }
-    .done {
-      text-align: center; padding: 1.5rem 0;
-      display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
+    /* ── Center states ───────────────────── */
+    .center {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 0.75rem; width: 100%; height: 100%;
     }
+    .big-spinner {
+      width: 28px; height: 28px; border-width: 3px;
+      border-color: rgba(255,132,0,0.2); border-top-color: var(--primary);
+    }
+    .done { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
     .done h3 { font-size: 1.05rem; color: var(--success); }
+
+    /* ═══ Mobile ═════════════════════════════ */
+    .mobile-shell {
+      display: none; flex-direction: column; width: 100%; min-height: 100vh;
+      background: var(--bg);
+    }
+    .mob-header { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 12px; }
+    .mob-title-row { display: flex; align-items: center; justify-content: space-between; }
+    .mob-title { font-family: var(--mono); font-size: 18px; font-weight: 700; letter-spacing: 3px; }
+    .mob-dl-icon { cursor: pointer; font-size: 18px; }
+    .mob-content { flex: 1; overflow-y: auto; padding: 8px 20px 0; }
+    .mob-bottom {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px 32px; background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    .mob-search { margin-bottom: 8px; }
+    .mob-search input {
+      width: 100%; background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
+    }
+    .mob-search input:focus { border-color: var(--primary); }
+    .mob-search input::placeholder { color: var(--muted); opacity: 0.6; }
+
+    @media (max-width: 768px) {
+      :host { display: block; height: auto; }
+      .left-panel, .right-panel { display: none !important; }
+      .mobile-shell { display: flex !important; }
+    }
   `];
 
   constructor() {
@@ -218,7 +165,6 @@ export class TimetableView extends LitElement {
     this._initError = '';
     this._loading = 'init';
     this._query = '';
-    this._open = new Set();
     this._loaded = new Map();
     this._loadingStgru = null;
     this._selected = new Set();
@@ -226,15 +172,13 @@ export class TimetableView extends LitElement {
     this._error = '';
     this._downloading = false;
     this._done = false;
+    this._mobileTab = 'courses';
   }
 
   connectedCallback() { super.connectedCallback(); this._init(); }
 
-  /* ═══ Init ═══════════════════════════════════════ */
-
   async _init() {
-    this._loading = 'init';
-    this._initError = '';
+    this._loading = 'init'; this._initError = '';
     try {
       const res = await fetch('/api/init');
       const data = await res.json();
@@ -244,24 +188,14 @@ export class TimetableView extends LitElement {
     this._loading = null;
   }
 
-  /* ═══ Tree toggle ════════════════════════════════ */
-
-  _toggleOpen(key) {
-    const s = new Set(this._open);
-    s.has(key) ? s.delete(key) : s.add(key);
-    this._open = s;
-  }
-
-  /* ═══ Data loading ═══════════════════════════════ */
+  /* ═══ Data loading ═════════════════════════ */
 
   async _loadGroup(g) {
     if (this._loaded.has(g.stgru) || this._loadingStgru) return;
-    this._loadingStgru = g.stgru;
-    this._error = '';
+    this._loadingStgru = g.stgru; this._error = '';
     try {
       const res = await fetch('/api/timetable', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stgru: g.stgru }),
       });
       const data = await res.json();
@@ -277,59 +211,18 @@ export class TimetableView extends LitElement {
   _unloadGroup(stgru) {
     const loaded = new Map(this._loaded);
     const group = loaded.get(stgru);
-    loaded.delete(stgru);
-    this._loaded = loaded;
+    loaded.delete(stgru); this._loaded = loaded;
     if (group) {
       const sel = new Set(this._selected);
       for (const c of group.courses) sel.delete(c.id);
       this._selected = sel;
-      if (group.courses.some(c => c.id === this._detailCourseId))
-        this._detailCourseId = null;
+      if (group.courses.some(c => c.id === this._detailCourseId)) this._detailCourseId = null;
     }
   }
 
-  _groupEvents(events, group) {
-    const map = new Map();
-    for (const ev of events) {
-      const name = (ev.summary || '').trim();
-      if (!name) continue;
-      const key = ev.lv_id || name;
-      if (!map.has(key)) {
-        map.set(key, {
-          id: `${group.stgru}::${key}`, summary: name, fullName: '',
-          groupLabel: group.label, slots: [], events: [],
-          lecturer: '', rooms: new Set(),
-        });
-      }
-      const c = map.get(key);
-      if (!c.fullName && ev.fach_name) c.fullName = ev.fach_name;
-      c.events.push(ev);
-      try {
-        const d = new Date(ev.dtstart);
-        const day = d.getDay(), wk = isoWeek(d);
-        const start = ev.dtstart.slice(11, 16);
-        const end = (ev.dtend || ev.dtstart).slice(11, 16);
-        const sk = `${day}-${start}-${end}`;
-        let slot = c.slots.find(s => s.key === sk);
-        if (!slot) {
-          slot = {
-            key: sk, day, start, end,
-            room: ev.location || '', rhythmus: ev.rhythmus || '7',
-            weeks: new Set(),
-          };
-          c.slots.push(slot);
-        }
-        slot.weeks.add(wk);
-      } catch {}
-      if (ev.location) c.rooms.add(ev.location);
-      const lec = ev.description?.match(/Dozent:\s*(.+)/);
-      if (lec && !c.lecturer) c.lecturer = lec[1].trim();
-    }
-    return [...map.values()].sort((a, b) =>
-      (a.fullName || a.summary).localeCompare(b.fullName || b.summary));
-  }
+  _groupEvents(events, group) { return groupEvents(events, group); }
 
-  /* ═══ Selection ══════════════════════════════════ */
+  /* ═══ Selection ════════════════════════════ */
 
   _toggle(id) {
     const s = new Set(this._selected);
@@ -351,11 +244,20 @@ export class TimetableView extends LitElement {
     this._selected = s;
   }
 
-  /* ═══ Computed ═══════════════════════════════════ */
+  _onPickerEvent(e) {
+    const t = e.type;
+    if (t === 'load-group')    this._loadGroup(e.detail);
+    if (t === 'unload-group')  this._unloadGroup(e.detail.stgru);
+    if (t === 'toggle-course') this._toggle(e.detail.id);
+    if (t === 'select-group')  this._selectGroup(e.detail.stgru, e.detail.on);
+  }
+
+  /* ═══ Computed ═════════════════════════════ */
 
   get _allCourses() { return [...this._loaded.values()].flatMap(g => g.courses); }
   get _selectedCourses() { return this._allCourses.filter(c => this._selected.has(c.id)); }
   get _totalEvents() { return this._selectedCourses.reduce((n, c) => n + c.events.length, 0); }
+  get _conflictCount() { return countConflicts(this._buildSlots(null)); }
 
   _buildSlots(parity) {
     return this._selectedCourses.flatMap(c => {
@@ -364,9 +266,7 @@ export class TimetableView extends LitElement {
         .filter(s => {
           if (!parity) return true;
           const wks = [...s.weeks];
-          return parity === 'even'
-            ? wks.some(w => w % 2 === 0)
-            : wks.some(w => w % 2 !== 0);
+          return parity === 'even' ? wks.some(w => w % 2 === 0) : wks.some(w => w % 2 !== 0);
         })
         .map(s => ({
           day: s.day, start: s.start, end: s.end,
@@ -380,17 +280,14 @@ export class TimetableView extends LitElement {
   }
 
   get _hasBiweekly() {
-    const all = this._buildSlots(null);
-    return all.some(s => {
+    return this._buildSlots(null).some(s => {
       const wks = [...(s.weeks || [])];
-      if (wks.length < 2) return wks.length === 1; // single event = show in one grid
-      const hasEven = wks.some(w => w % 2 === 0);
-      const hasOdd  = wks.some(w => w % 2 !== 0);
-      return !(hasEven && hasOdd);
+      if (wks.length < 2) return wks.length === 1;
+      return !(wks.some(w => w % 2 === 0) && wks.some(w => w % 2 !== 0));
     });
   }
 
-  /* ═══ Download ═══════════════════════════════════ */
+  /* ═══ Download ═════════════════════════════ */
 
   async _download() {
     const events = this._selectedCourses.flatMap(c => c.events);
@@ -405,197 +302,139 @@ export class TimetableView extends LitElement {
       const a = Object.assign(document.createElement('a'), {
         href: URL.createObjectURL(await res.blob()), download: 'stundenplan.ics',
       });
-      a.click();
-      URL.revokeObjectURL(a.href);
+      a.click(); URL.revokeObjectURL(a.href);
       this._done = true;
     } catch (e) { this._error = e.message; }
     finally { this._downloading = false; }
   }
 
-  /* ═══ Render ═════════════════════════════════════ */
+  /* ═══ Render ═══════════════════════════════ */
 
   render() {
-    if (this._loading === 'init') {
-      return html`<div class="center">
-        <span class="spinner big-spinner"></span>
-        <p class="hint">Verbinde mit Primuss…</p>
-      </div>`;
-    }
-    if (this._initError) {
-      return html`<div class="stack">
-        <p class="error-msg">❌ ${this._initError}</p>
-        <button class="btn-primary" @click=${this._init}>Erneut versuchen</button>
-      </div>`;
-    }
-    if (this._done) {
-      return html`<div class="stack">
-        <div class="done">
-          <h3>🎉 stundenplan.ics heruntergeladen</h3>
-          <p class="hint">Öffne die Datei in Google Calendar, Apple Kalender oder Outlook.</p>
-          <button class="btn-primary" @click=${() => { this._done = false; }}>← Zurück</button>
-        </div>
-      </div>`;
-    }
+    if (this._loading === 'init')
+      return html`<div class="center"><span class="spinner big-spinner"></span><p class="hint">Verbinde mit Primuss…</p></div>`;
+    if (this._initError)
+      return html`<div class="center"><p class="error-msg">${this._initError}</p><button class="btn-primary" @click=${this._init}>Erneut versuchen</button></div>`;
+    if (this._done)
+      return html`<div class="center"><div class="done"><h3>stundenplan.ics heruntergeladen</h3><p class="hint">Öffne die Datei in Google Calendar, Apple Kalender oder Outlook.</p><button class="btn-primary" @click=${() => { this._done = false; }}>Zurück</button></div></div>`;
 
+    return html`${this._renderDesktop()}${this._renderMobile()}`;
+  }
+
+  _renderDesktop() {
     const allSlots = this._buildSlots(null);
     const biweekly = this._hasBiweekly;
+    return html`
+      <div class="left-panel">
+        <div class="left-hdr">
+          <span class="app-title">COURSE PLANNER</span>
+          <span class="app-sub">Select your courses below</span>
+        </div>
+        <div class="search-wrap">
+          <input type="search" placeholder="Search…"
+                 .value=${this._query} @input=${e => this._query = e.target.value} />
+        </div>
+        <div class="course-scroll">
+          <course-picker .courseTree=${this._courseTree} .loaded=${this._loaded}
+            .selected=${this._selected} .loadingStgru=${this._loadingStgru}
+            .query=${this._query}
+            @load-group=${this._onPickerEvent} @unload-group=${this._onPickerEvent}
+            @toggle-course=${this._onPickerEvent} @select-group=${this._onPickerEvent}>
+          </course-picker>
+        </div>
+        ${this._renderBottomBar()}
+      </div>
+      <div class="right-panel">
+        <div class="right-hdr">
+          <span class="sched-title">WEEKLY SCHEDULE</span>
+          <span class="sem-label">Winter Semester 2026/27</span>
+          <div class="legend">
+            <div class="leg-item"><span class="leg-dot" style="background:var(--primary)"></span> Weekly</div>
+            ${biweekly ? html`<div class="leg-item"><span class="leg-dot" style="background:var(--success)"></span> Bi-weekly</div>` : ''}
+          </div>
+        </div>
+        <div class="timetable-wrap">
+          ${allSlots.length > 0 ? (biweekly ? this._renderBiweeklyGrids() :
+            html`<week-grid .slots=${allSlots} @slot-click=${this._onSlotClick}></week-grid>`) : ''}
+          ${this._detailCourseId ? this._renderDetail() : ''}
+        </div>
+        ${this._error ? html`<p class="error-msg" style="margin:0 32px 16px">${this._error}</p>` : ''}
+      </div>`;
+  }
 
-    return html`<div class="stack">
-      <h2>Stundenplan</h2>
-      ${this._renderPicker()}
-      ${this._loaded.size > 0 ? this._renderCourses() : ''}
-      ${allSlots.length > 0 ? (biweekly
-        ? this._renderBiweeklyGrids()
-        : html`<week-grid .slots=${allSlots} @slot-click=${this._onSlotClick}></week-grid>`) : ''}
-      ${this._detailCourseId ? this._renderDetail() : ''}
-      ${this._error ? html`<p class="error-msg">❌ ${this._error}</p>` : ''}
-      ${this._loaded.size > 0 ? this._renderFooter() : ''}
-    </div>`;
+  _renderMobile() {
+    const n = this._selectedCourses.length;
+    return html`
+      <div class="mobile-shell">
+        <div class="mob-header">
+          <div class="mob-title-row">
+            <span class="mob-title">COURSE PLANNER</span>
+            <span class="mob-dl-icon" @click=${this._download} title="Download .ics">⬇</span>
+          </div>
+          <div class="tabs">
+            <button class="tab ${this._mobileTab === 'courses' ? 'active' : ''}"
+                    @click=${() => this._mobileTab = 'courses'}>Courses</button>
+            <button class="tab ${this._mobileTab === 'schedule' ? 'active' : ''}"
+                    @click=${() => this._mobileTab = 'schedule'}>Schedule</button>
+          </div>
+        </div>
+        <div class="mob-content">
+          ${this._mobileTab === 'courses' ? html`
+            <div class="mob-search">
+              <input type="search" placeholder="Search…"
+                     .value=${this._query} @input=${e => this._query = e.target.value} />
+            </div>
+            <course-picker .courseTree=${this._courseTree} .loaded=${this._loaded}
+              .selected=${this._selected} .loadingStgru=${this._loadingStgru}
+              .query=${this._query}
+              @load-group=${this._onPickerEvent} @unload-group=${this._onPickerEvent}
+              @toggle-course=${this._onPickerEvent} @select-group=${this._onPickerEvent}>
+            </course-picker>
+          ` : html`
+            <schedule-list .slots=${this._buildSlots(null)}
+              .hasBiweekly=${this._selectedCourses.some(c => c.slots.some(s => s.rhythmus === '14'))}
+              @slot-click=${this._onSlotClick}>
+            </schedule-list>
+          `}
+        </div>
+        <div class="mob-bottom">
+          <div class="sel-info">
+            <span class="sel-count">${n} course${n !== 1 ? 's' : ''} selected</span>
+            ${n > 0 ? html`<span class="sel-note" style="color:${this._conflictCount ? 'var(--error)' : 'var(--success)'}">
+              ${this._conflictCount ? `⚠ ${this._conflictCount} conflict${this._conflictCount > 1 ? 's' : ''}` : '✓ No time conflicts'}
+            </span>` : ''}
+          </div>
+          <button class="btn-primary" ?disabled=${this._downloading || !n} @click=${this._download}>
+            ${this._downloading ? html`<span class="spinner"></span>` : '+ Download'}
+          </button>
+        </div>
+      </div>`;
+  }
+
+  _renderBottomBar() {
+    const n = this._selectedCourses.length;
+    const conflicts = this._conflictCount;
+    return html`
+      <div class="bottom-bar">
+        <div class="sel-info">
+          <span class="sel-count">${n} course${n !== 1 ? 's' : ''} selected</span>
+          ${n > 0 ? html`<span class="sel-note" style="color:${conflicts ? 'var(--error)' : 'var(--success)'}">
+            ${conflicts ? `⚠ ${conflicts} time conflict${conflicts > 1 ? 's' : ''}` : '✓ No time conflicts'}
+          </span>` : ''}
+        </div>
+        <button class="btn-primary" ?disabled=${this._downloading || !n} @click=${this._download}>
+          ${this._downloading ? html`<span class="spinner"></span> Generating…` : 'Download .ics'}
+        </button>
+      </div>`;
   }
 
   _renderBiweeklyGrids() {
     return html`<div class="grids">
-      <div>
-        <div class="grid-label">📅 Ungerade KW</div>
-        <week-grid .slots=${this._buildSlots('odd')} @slot-click=${this._onSlotClick}></week-grid>
-      </div>
-      <div>
-        <div class="grid-label">📅 Gerade KW</div>
-        <week-grid .slots=${this._buildSlots('even')} @slot-click=${this._onSlotClick}></week-grid>
-      </div>
+      <div><div class="grid-label">UNGERADE KW</div>
+        <week-grid .slots=${this._buildSlots('odd')} @slot-click=${this._onSlotClick}></week-grid></div>
+      <div><div class="grid-label">GERADE KW</div>
+        <week-grid .slots=${this._buildSlots('even')} @slot-click=${this._onSlotClick}></week-grid></div>
     </div>`;
-  }
-
-  _renderPicker() {
-    const q = this._query.toLowerCase();
-    const loadedKeys = new Set([...this._loaded.keys()]);
-
-    return html`
-      ${loadedKeys.size > 0 ? html`
-        <div class="loaded-chips">
-          <span class="loaded-label">Geladen:</span>
-          ${[...this._loaded].map(([stgru, g]) => html`
-            <span class="chip active">${g.label}
-              <span class="x" @click=${() => this._unloadGroup(stgru)}>✕</span>
-            </span>`)}
-        </div>
-      ` : html`<p class="hint">Wähle eine Studiengruppe um Kurse zu laden.</p>`}
-
-      <input type="search" placeholder="🔍 Studiengruppe suchen…"
-             .value=${this._query} @input=${e => this._query = e.target.value} />
-
-      <div class="tree">
-        ${(this._courseTree || []).map(fac => this._renderFac(fac, q, loadedKeys))}
-      </div>`;
-  }
-
-  _renderFac(fac, q, loadedKeys) {
-    const allGroups = fac.degrees.flatMap(d => d.programs.flatMap(p => p.groups));
-    const matches = q
-      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : allGroups;
-    if (!matches.length) return '';
-    const key = `fac::${fac.label}`;
-    const open = q || this._open.has(key);
-    const loadedN = allGroups.filter(g => loadedKeys.has(g.stgru)).length;
-    return html`
-      <div class="row-fac" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        ${fac.label}
-        <span class="count">${allGroups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}</span>
-      </div>
-      ${open ? fac.degrees.map(deg => this._renderDeg(fac, deg, q, loadedKeys)) : ''}`;
-  }
-
-  _renderDeg(fac, deg, q, loadedKeys) {
-    const allGroups = deg.programs.flatMap(p => p.groups);
-    const matches = q
-      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : allGroups;
-    if (!matches.length) return '';
-    const key = `deg::${fac.label}::${deg.label}`;
-    const open = q || this._open.has(key);
-    return html`
-      <div class="row-deg" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        ${deg.label}
-        <span class="count">${allGroups.length}</span>
-      </div>
-      ${open ? deg.programs.map(prog => this._renderProg(fac, deg, prog, q, loadedKeys)) : ''}`;
-  }
-
-  _renderProg(fac, deg, prog, q, loadedKeys) {
-    const groups = q
-      ? prog.groups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : prog.groups;
-    if (!groups.length) return '';
-    const key = `prog::${fac.label}::${prog.code}`;
-    const open = q || this._open.has(key);
-    return html`
-      <div class="row-prog" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        <span class="prog-name">${prog.name || prog.code}</span>
-        <span class="count">${groups.length}</span>
-      </div>
-      ${open ? html`
-        <div class="chips-row">
-          ${groups.map(g => {
-            const active = loadedKeys.has(g.stgru);
-            const loading = this._loadingStgru === g.stgru;
-            return html`
-              <span class="chip ${active ? 'active' : ''} ${loading ? 'loading' : ''}"
-                    @click=${e => { e.stopPropagation(); active ? this._unloadGroup(g.stgru) : this._loadGroup(g); }}>
-                ${loading ? html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>` : ''}
-                ${g.label}${active ? html` <span class="x">✕</span>` : ''}
-              </span>`;
-          })}
-        </div>` : ''}`;
-  }
-
-  _renderCourses() {
-    return html`
-      <div class="courses">
-        ${[...this._loaded].map(([stgru, group]) => html`
-          <div class="grp-hdr">
-            <span>${group.label} · ${group.courses.length} Kurse</span>
-            <button class="btn-chip" @click=${() => this._selectGroup(stgru, true)}>Alle</button>
-            <button class="btn-chip" @click=${() => this._selectGroup(stgru, false)}>Keine</button>
-          </div>
-          ${group.courses.map(c => this._renderCourse(c))}
-        `)}
-      </div>`;
-  }
-
-  _renderCourse(c) {
-    const on = this._selected.has(c.id);
-    const color = colorOf(c.id);
-    const name = c.fullName || c.summary;
-    const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
-    const hasBi = c.slots.some(s => s.rhythmus === '14');
-    const slots = c.slots.map(s =>
-      `${DAY[s.day]} ${s.start}–${s.end}`).join(', ');
-
-    return html`
-      <div class="course ${on ? 'on' : ''}" @click=${() => this._toggle(c.id)}>
-        <input type="checkbox" .checked=${on} />
-        <span class="dot" style="background:${color}"></span>
-        <div style="flex:1;min-width:0">
-          <div class="c-name">
-            ${name}${tag ? html` <span class="c-tag">${tag}</span>` : ''}
-            ${hasBi ? html` <span class="c-biweekly">14-tägig</span>` : ''}
-          </div>
-          <div class="c-meta">
-            ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
-          </div>
-        </div>
-        <span class="c-count">${c.events.length}×</span>
-      </div>`;
   }
 
   _renderDetail() {
@@ -604,21 +443,15 @@ export class TimetableView extends LitElement {
     const color = colorOf(c.id);
     const name = c.fullName || c.summary;
     const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
-
-    // Group events by slot (day+time)
     const bySlot = new Map();
     for (const ev of c.events) {
       try {
         const d = new Date(ev.dtstart);
-        const day = d.getDay();
-        const start = ev.dtstart.slice(11, 16);
-        const end = (ev.dtend || ev.dtstart).slice(11, 16);
-        const sk = `${DAY[day]} ${start}–${end}`;
+        const sk = `${DAY_NAMES[d.getDay()]} ${ev.dtstart.slice(11, 16)}–${(ev.dtend || ev.dtstart).slice(11, 16)}`;
         if (!bySlot.has(sk)) bySlot.set(sk, []);
         bySlot.get(sk).push(ev);
       } catch {}
     }
-
     return html`
       <div class="detail">
         <div class="detail-hdr">
@@ -627,31 +460,11 @@ export class TimetableView extends LitElement {
           ${tag ? html`<span class="detail-tag">${tag}</span>` : ''}
           <span class="detail-close" @click=${() => { this._detailCourseId = null; }}>✕</span>
         </div>
-        ${c.lecturer ? html`<div class="detail-meta">👤 ${c.lecturer}</div>` : ''}
+        ${c.lecturer ? html`<div class="detail-meta">${c.lecturer}</div>` : ''}
         ${[...bySlot].map(([sk, evs]) => html`
-          <div class="detail-slot-hdr">
-            ${sk}${evs[0]?.location ? ` · 📍 ${evs[0].location}` : ''}
-            · ${evs.length} Termine
-          </div>
-          <div class="detail-dates">
-            ${evs.sort((a, b) => a.dtstart.localeCompare(b.dtstart))
-                 .map(ev => html`<span>${fmtDate(ev.dtstart)}</span>`)}
-          </div>
+          <div class="detail-slot-hdr">${sk}${evs[0]?.location ? ` · ${evs[0].location}` : ''} · ${evs.length} Termine</div>
+          <div class="detail-dates">${evs.sort((a, b) => a.dtstart.localeCompare(b.dtstart)).map(ev => html`<span>${fmtDate(ev.dtstart)}</span>`)}</div>
         `)}
-      </div>`;
-  }
-
-  _renderFooter() {
-    return html`
-      <div class="foot">
-        <span class="stats">${this._selectedCourses.length} Kurse · ${this._totalEvents} Termine</span>
-        <button class="btn-primary"
-                ?disabled=${this._downloading || !this._selectedCourses.length}
-                @click=${this._download}>
-          ${this._downloading
-            ? html`<span class="spinner"></span> Generiere…`
-            : '📅 ICS herunterladen'}
-        </button>
       </div>`;
   }
 }

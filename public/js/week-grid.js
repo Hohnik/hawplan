@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 
-const ALL_DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+const ALL_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const START = 8, END = 20, HOURS = END - START, QROWS = HOURS * 4;
 
 /**
@@ -19,40 +19,43 @@ export class WeekGrid extends LitElement {
       display: grid;
       grid-template-rows: 24px repeat(${QROWS}, 11px);
       font-size: 0.72rem;
-      border-radius: var(--radius-sm, 7px);
+      border-radius: var(--radius-sm, 8px);
       overflow: hidden;
-      border: 1px solid var(--border, #2d3343);
-      background: var(--bg, #0d1017);
+      border: 1px solid var(--border, #2E2E2E);
+      background: var(--bg, #111111);
     }
 
-    .corner { grid-column: 1; grid-row: 1; background: var(--surface-2, #1c2333); }
+    .corner { grid-column: 1; grid-row: 1; background: var(--surface-2, #2E2E2E); }
     .day-hdr {
       grid-row: 1;
       display: flex; align-items: center; justify-content: center;
       font-weight: 600; font-size: 0.74rem;
-      color: var(--muted, #919bab);
-      background: var(--surface-2, #1c2333);
-      border-left: 1px solid var(--border, #2d3343);
+      font-family: var(--mono, monospace);
+      letter-spacing: 2px;
+      color: var(--text, #FFFFFF);
+      background: var(--surface-2, #2E2E2E);
+      border-left: 1px solid var(--border, #2E2E2E);
     }
 
     .time {
       grid-column: 1;
       display: flex; align-items: flex-start; justify-content: flex-end;
       padding-right: 5px; margin-top: -5px;
-      color: var(--muted, #919bab);
+      color: var(--muted, #B8B9B6);
+      font-family: var(--mono, monospace);
       font-size: 0.62rem; line-height: 1;
     }
 
     .hline {
       grid-column: 2 / -1;
-      border-top: 1px solid var(--border, #2d3343);
+      border-top: 1px solid var(--border, #2E2E2E);
       pointer-events: none;
     }
 
     .day-col {
       position: relative;
       grid-row: 2 / -1;
-      border-left: 1px solid var(--border, #2d3343);
+      border-left: 1px solid var(--border, #2E2E2E);
     }
 
     .ev {
@@ -67,29 +70,42 @@ export class WeekGrid extends LitElement {
     }
     .ev:hover { filter: brightness(1.3); }
     .ev.conflict {
-      outline: 1.5px dashed rgba(248,113,113,0.7);
+      outline: 1.5px dashed rgba(255,92,51,0.7);
       outline-offset: -1.5px;
     }
     .ev-label {
       font-weight: 600;
+      font-family: var(--font, sans-serif);
       overflow: hidden;
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+      text-shadow: 0 0 0 transparent; /* ensure crisp text on colored bg */
     }
     .ev-sub {
-      opacity: 0.75; font-size: 0.58rem;
+      font-size: 0.58rem;
+      font-family: var(--mono, monospace);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      opacity: 0.7;
     }
 
     .empty-msg {
       grid-column: 1 / -1; grid-row: 2 / -1;
       display: flex; align-items: center; justify-content: center;
-      color: var(--muted, #919bab); font-size: 0.82rem; z-index: 2;
+      color: var(--muted, #B8B9B6); font-size: 0.82rem; z-index: 2;
     }
   `;
 
   constructor() { super(); this.slots = []; }
 
   _toMin(t) { const [h, m] = t.split(':').map(Number); return (h - START) * 60 + m; }
+
+  /** Pick dark/light text for readable contrast on a colored background. */
+  _contrastFg(hex) {
+    const c = hex.replace('#', '');
+    const r = parseInt(c.substring(0, 2), 16);
+    const g = parseInt(c.substring(2, 4), 16);
+    const b = parseInt(c.substring(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55 ? '#111111' : '#FFFFFF';
+  }
 
   _layoutDay(daySlots) {
     if (!daySlots.length) return [];
@@ -133,17 +149,16 @@ export class WeekGrid extends LitElement {
     const lines = [s.label];
     if (s.tag) lines[0] += ` (${s.tag})`;
     lines.push(`${s.start}–${s.end}`);
-    if (s.room) lines.push(`📍 ${s.room}`);
-    if (s.lecturer) lines.push(`👤 ${s.lecturer}`);
+    if (s.room) lines.push(`${s.room}`);
+    if (s.lecturer) lines.push(`${s.lecturer}`);
     const r = s.rhythmus;
     const n = s.eventCount || '';
-    if (r === '14') lines.push(`🔁 Alle 2 Wochen${n ? ` · ${n} Termine` : ''}`);
-    else if (n) lines.push(`🔁 Wöchentlich · ${n} Termine`);
+    if (r === '14') lines.push(`Alle 2 Wochen${n ? ` · ${n} Termine` : ''}`);
+    else if (n) lines.push(`Wöchentlich · ${n} Termine`);
     if (s.weeks?.size && r === '14') {
       const wks = [...s.weeks].sort((a, b) => a - b);
       lines.push(`KW ${wks.join(', ')}`);
     }
-    lines.push('', 'Klick → Einzeltermine');
     return lines.join('\n');
   }
 
@@ -192,16 +207,16 @@ export class WeekGrid extends LitElement {
           ${(laid.get(day) || []).map(s => {
             const top = (s.startMin / (HOURS * 60)) * totalH;
             const h = ((s.endMin - s.startMin) / (HOURS * 60)) * totalH;
+            const fg = this._contrastFg(s.color);
             return html`
               <div class="ev ${s.conflict ? 'conflict' : ''}"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
-                          background:${s.color}18;border-left:3px solid ${s.color};color:${s.color}"
+                          background:${s.color};color:${fg}"
                    title=${this._tooltip(s)}
                    @click=${() => this._onClick(s)}>
                 <span class="ev-label">${s.label}</span>
-                ${h > 30 ? html`<span class="ev-sub">${s.start}–${s.end}</span>` : ''}
-                ${h > 45 && s.lecturer ? html`<span class="ev-sub">${s.lecturer}</span>` : ''}
-                ${h > 60 && s.room ? html`<span class="ev-sub">📍 ${s.room}</span>` : ''}
+                ${h > 30 ? html`<span class="ev-sub">${s.start} – ${s.end}</span>` : ''}
+                ${h > 45 && s.room ? html`<span class="ev-sub">${s.room}</span>` : ''}
               </div>`;
           })}
         </div>`)}

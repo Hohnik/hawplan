@@ -1,5 +1,25 @@
 # Logbook
 
+## 2026-03-03 — Pencil design alignment, component extraction, conflict detection
+
+**Design system from Pencil:** Extracted full design spec from Pencil MCP server (desktop + 2 mobile screens). Updated color tokens to match: `--bg: #111111`, `--surface: #1A1A1A`, `--border: #2E2E2E`, `--primary: #FF8400`. Fonts: JetBrains Mono (headings, mono) + Geist (body). Already had most of the design implemented from a prior session.
+
+**Grid events → solid fill:** Changed from translucent bg (`color18`) + colored text to solid color fill + contrast text (dark on light colors, white on dark). Added `_contrastFg()` luminance helper. Matches the Pencil desktop design exactly.
+
+**Day headers → English:** `Mo/Di/Mi/Do/Fr/Sa` → `MON/TUE/WED/THU/FRI/SAT` with `letter-spacing: 2px` per design spec.
+
+**Conflict detection:** Added `countConflicts(slots)` in helpers.js — O(n²) pairwise check for same-day time overlaps. Both desktop and mobile bottom bars now show dynamic "✓ No time conflicts" (green) or "⚠ N time conflicts" (red) based on actual selected slots.
+
+**Component structure (6 files, 1314 lines total):**
+- `helpers.js` (76) — shared functions: colorOf, isoWeek, fmtDate, countConflicts, groupEvents
+- `shared-styles.js` (92) — shared Lit CSS tokens + tabs
+- `course-picker.js` (224) — faculty tree accordion + course list with checkboxes
+- `schedule-list.js` (158) — mobile day-by-day card schedule
+- `week-grid.js` (227) — desktop CSS grid timetable
+- `timetable-view.js` (472) — orchestrator: init, data loading, selection, download, desktop+mobile layout
+- `global.css` (55) — design tokens, fonts, body
+- `index.html` (13) — just mounts `<timetable-view>`
+
 ## 2026-03-03 — Saturday, biweekly grids, conflicts, event details
 
 **Saturday column:** `week-grid` auto-detects `day === 6` in slots and switches between 5 and 6 columns. Grid template set dynamically via inline `style` on `.grid`. No extra prop needed — grid adapts to its data.
