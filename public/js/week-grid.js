@@ -138,9 +138,23 @@ export class WeekGrid extends LitElement {
         assigned.push(col);
       }
       const total = cols.length;
-      const conflict = total > 1;
-      for (let i = 0; i < group.length; i++)
+      for (let i = 0; i < group.length; i++) {
+        let conflict = false;
+        if (total > 1) {
+          const a = group[i];
+          for (let j = 0; j < group.length && !conflict; j++) {
+            if (i === j) continue;
+            const b = group[j];
+            if (a.startMin >= b.endMin || b.startMin >= a.endMin) continue;
+            if (a.weeks?.size && b.weeks?.size) {
+              for (const w of a.weeks) { if (b.weeks.has(w)) { conflict = true; break; } }
+            } else {
+              conflict = true;
+            }
+          }
+        }
         result.push({ ...group[i], left: assigned[i] / total, width: 1 / total, conflict });
+      }
     }
     return result;
   }
