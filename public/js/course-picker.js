@@ -35,8 +35,8 @@ export class CoursePicker extends LitElement {
     .search-area input::placeholder { color: var(--muted); opacity: 0.6; }
 
     .dropdown {
-      position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
-      margin-top: 4px; max-height: 260px; overflow-y: auto;
+      position: fixed; z-index: 100;
+      max-height: 260px; overflow-y: auto;
       background: var(--surface); border: 1px solid var(--border);
       border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     }
@@ -151,6 +151,23 @@ export class CoursePicker extends LitElement {
 
   _fire(name, detail) {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
+  }
+
+  updated() {
+    if (this._dropOpen) {
+      const input = this.shadowRoot.querySelector('input');
+      const drop = this.shadowRoot.querySelector('.dropdown');
+      if (input && drop) {
+        const r = input.getBoundingClientRect();
+        const maxH = Math.min(260, window.innerHeight - r.bottom - 16);
+        Object.assign(drop.style, {
+          top: `${r.bottom + 4}px`,
+          left: `${r.left}px`,
+          width: `${r.width}px`,
+          maxHeight: `${maxH}px`,
+        });
+      }
+    }
   }
 
   /** Flatten all groups from the tree for search. */
