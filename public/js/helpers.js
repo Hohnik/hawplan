@@ -40,6 +40,7 @@ export function countConflicts(slots) {
 
 /** Group raw Primuss events by course (lv_id or summary). */
 export function groupEvents(events, group) {
+  const map = new Map();
   for (const ev of events) {
     const name = (ev.summary || '').trim();
     if (!name) continue;

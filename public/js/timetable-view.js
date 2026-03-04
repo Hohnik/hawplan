@@ -22,7 +22,7 @@ export class TimetableView extends LitElement {
   };
 
   static styles = [shared, css`
-    :host { display: flex; height: 100vh; background: var(--bg); }
+    :host { background: var(--bg); }
 
     /* ═══ Desktop split ═════════════════════ */
     .left-panel {
@@ -33,7 +33,8 @@ export class TimetableView extends LitElement {
       height: 100vh; overflow: hidden;
     }
     .right-panel {
-      flex: 1; display: flex; flex-direction: column;
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column;
       height: 100vh; overflow: hidden;
     }
     .left-hdr {
@@ -153,7 +154,6 @@ export class TimetableView extends LitElement {
     .mob-search input::placeholder { color: var(--muted); opacity: 0.6; }
 
     @media (max-width: 768px) {
-      :host { display: block; height: auto; }
       .left-panel, .right-panel { display: none !important; }
       .mobile-shell { display: flex !important; }
     }

@@ -44,12 +44,12 @@ body {
 }
 
 timetable-view {
-  display: block;
+  display: flex;
   width: 100%;
   height: 100vh;
 }
 
 @media (max-width: 768px) {
   body { overflow: auto; }
-  timetable-view { height: auto; min-height: 100vh; }
+  timetable-view { display: block; height: auto; min-height: 100vh; }
 }
