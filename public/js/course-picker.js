@@ -4,8 +4,11 @@ import { shared } from './shared-styles.js';
 const DAY_NAMES = ['So','Mo','Di','Mi','Do','Fr','Sa'];
 
 /**
- * <course-picker .courseTree=${[...]} .loaded=${Map} .selected=${Set}></course-picker>
- * Renders the faculty tree accordion + course list with checkboxes.
+ * <course-picker .courseTree .loaded .selected .loadingStgru .query></course-picker>
+ *
+ * Redesigned: search-first group picker with dropdown, active chips,
+ * and flat course list as the main content area.
+ *
  * Fires: 'load-group', 'unload-group', 'toggle-course', 'select-group'.
  */
 export class CoursePicker extends LitElement {
@@ -15,69 +18,110 @@ export class CoursePicker extends LitElement {
     selected:     { type: Object },
     loadingStgru: { type: String },
     query:        { type: String },
-    _open:        { state: true },
+    _dropOpen:    { state: true },
   };
 
   static styles = [shared, css`
-    :host { display: block; }
+    :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-    .tree { border-top: 1px solid var(--border); }
-
-    .row-fac, .row-deg, .row-prog {
-      display: flex; align-items: center; gap: 0.45rem;
-      cursor: pointer; transition: background 0.1s;
-      border-bottom: 1px solid var(--border);
+    /* ── Search + Dropdown ── */
+    .search-area { position: relative; }
+    .search-area input {
+      width: 100%; background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
     }
-    .row-fac:hover, .row-deg:hover, .row-prog:hover { background: var(--surface-2); }
-    .row-fac  { padding: 12px 24px; font-size: 13px; font-weight: 600; }
-    .row-deg  { padding: 10px 24px 10px 40px; font-size: 12px; color: var(--muted); font-weight: 600; }
-    .row-prog { padding: 8px 24px 8px 56px; font-size: 12px; }
-    .arrow { color: var(--muted); font-size: 0.55em; width: 0.8em; flex-shrink: 0; }
-    .prog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .count { font-size: 0.72rem; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+    .search-area input:focus { border-color: var(--primary); }
+    .search-area input::placeholder { color: var(--muted); opacity: 0.6; }
 
-    .chips-row {
-      display: flex; flex-wrap: wrap; gap: 0.3rem;
-      padding: 8px 24px 10px 64px;
-      background: var(--bg); border-bottom: 1px solid var(--border);
+    .dropdown {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+      margin-top: 4px; max-height: 260px; overflow-y: auto;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .dropdown::-webkit-scrollbar { width: 4px; }
+    .dropdown::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+    .drop-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; cursor: pointer; transition: background 0.1s;
+    }
+    .drop-item:hover { background: var(--surface-2); }
+    .drop-item.active { opacity: 0.4; pointer-events: none; }
+    .drop-label { font-size: 12px; font-weight: 600; }
+    .drop-path {
+      font-size: 10px; color: var(--muted);
+      font-family: var(--mono); letter-spacing: 0.2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .drop-empty {
+      padding: 16px 12px; text-align: center;
+      font-size: 12px; color: var(--muted);
+    }
+
+    /* ── Active group chips ── */
+    .chips {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      padding: 10px 0 0;
+      min-height: 0;
     }
     .chip {
-      padding: 0.22rem 0.55rem; font-size: 0.74rem;
-      border-radius: 99px; border: 1px solid var(--border);
-      background: var(--bg); color: var(--muted);
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 600;
+      font-family: var(--mono); letter-spacing: 0.3px;
       cursor: pointer; transition: all 0.12s;
-      display: inline-flex; align-items: center; gap: 0.2rem;
     }
-    .chip:hover { border-color: var(--primary); color: var(--text); }
-    .chip.active {
-      background: var(--accent-bg); border-color: var(--primary);
-      color: var(--primary); font-weight: 600;
+    .chip-active {
+      background: var(--primary); color: var(--primary-fg);
     }
-    .chip.loading { opacity: 0.5; pointer-events: none; }
-    .chip .x { font-size: 0.55rem; opacity: 0.6; }
+    .chip-active:hover { filter: brightness(1.1); }
+    .chip-active .x { opacity: 0.5; font-size: 9px; }
+    .chip-active .x:hover { opacity: 1; }
+    .chip-loading {
+      background: var(--accent-bg); color: var(--primary);
+      border: 1px dashed var(--primary);
+    }
 
-    .courses-section { padding: 8px 24px 0; }
+    /* ── Course list ── */
+    .course-list {
+      flex: 1; overflow-y: auto; padding-top: 4px;
+    }
+    .course-list::-webkit-scrollbar { width: 4px; }
+    .course-list::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+
     .grp-hdr {
-      display: flex; align-items: center; gap: 0.5rem;
-      font-size: 0.72rem; font-weight: 600; color: var(--muted);
-      font-family: var(--mono); letter-spacing: 0.05em;
-      text-transform: uppercase;
-      margin-top: 8px; padding-bottom: 4px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 0 6px;
       border-bottom: 1px solid var(--border);
     }
-    .grp-hdr span:first-child { flex: 1; }
+    .grp-hdr:not(:first-child) { margin-top: 8px; }
+    .grp-label {
+      flex: 1; font-size: 10px; font-weight: 600; color: var(--muted);
+      font-family: var(--mono); letter-spacing: 1px; text-transform: uppercase;
+    }
+    .grp-btn {
+      font-size: 10px; font-weight: 600; font-family: var(--mono);
+      background: none; border: none; cursor: pointer; padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .grp-btn-all { color: var(--primary); }
+    .grp-btn-all:hover { background: var(--accent-bg); }
+    .grp-btn-none { color: var(--muted); }
+    .grp-btn-none:hover { background: var(--surface-2); }
 
     .course-item {
       display: flex; align-items: center; gap: 10px;
-      padding: 6px 8px; border-radius: 4px; background: var(--bg);
-      cursor: pointer; user-select: none; margin-top: 4px;
+      padding: 7px 8px; border-radius: 6px;
+      cursor: pointer; user-select: none; margin-top: 3px;
+      transition: background 0.1s;
     }
     .course-item:hover { background: var(--surface-2); }
     .course-item.on { background: var(--accent-bg); }
     .course-item input[type='checkbox'] {
       accent-color: var(--primary); pointer-events: none; flex-shrink: 0;
     }
-    .ci-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .ci-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
     .ci-name {
       font-weight: 500; font-size: 12px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -85,7 +129,14 @@ export class CoursePicker extends LitElement {
     .ci-meta {
       font-family: var(--mono); font-size: 9px; font-weight: 500;
       color: var(--muted); letter-spacing: 0.3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+
+    .empty-hint {
+      text-align: center; padding: 40px 20px;
+      color: var(--muted); font-size: 13px; line-height: 1.6;
+    }
+    .empty-hint strong { color: var(--text); }
   `];
 
   constructor() {
@@ -95,111 +146,124 @@ export class CoursePicker extends LitElement {
     this.selected = new Set();
     this.loadingStgru = null;
     this.query = '';
-    this._open = new Set();
-  }
-
-  _toggleOpen(key) {
-    const s = new Set(this._open);
-    s.has(key) ? s.delete(key) : s.add(key);
-    this._open = s;
+    this._dropOpen = false;
   }
 
   _fire(name, detail) {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
 
+  /** Flatten all groups from the tree for search. */
+  get _allGroups() {
+    return (this.courseTree || []).flatMap(fac =>
+      fac.degrees.flatMap(deg =>
+        deg.programs.flatMap(prog =>
+          prog.groups.map(g => ({
+            ...g, path: [fac.label, prog.name || prog.code].filter(Boolean).join(' › '),
+          }))
+        )
+      )
+    );
+  }
+
+  /** Groups matching the current query. */
+  get _filteredGroups() {
+    const q = (this.query || '').toLowerCase().trim();
+    if (!q) return [];
+    return this._allGroups.filter(g =>
+      g.label.toLowerCase().includes(q)
+      || (g.program_name || '').toLowerCase().includes(q)
+      || g.path.toLowerCase().includes(q)
+    ).slice(0, 20);
+  }
+
+  _onInput(e) {
+    this._fire('query-change', e.target.value);
+    this._dropOpen = e.target.value.trim().length > 0;
+  }
+
+  _onFocus() {
+    if ((this.query || '').trim()) this._dropOpen = true;
+  }
+
+  _pickGroup(g) {
+    this._fire('load-group', g);
+    this._fire('query-change', '');
+    this._dropOpen = false;
+  }
+
   render() {
-    const q = this.query.toLowerCase();
     const loadedKeys = new Set([...this.loaded.keys()]);
+    const hasLoaded = this.loaded.size > 0;
+
     return html`
-      <div class="tree">
-        ${(this.courseTree || []).map(fac => this._renderFac(fac, q, loadedKeys))}
+      <div class="search-area">
+        <input type="search" placeholder="Search study group (e.g. IF4, MIB2)…"
+               .value=${this.query}
+               @input=${this._onInput}
+               @focus=${this._onFocus}
+               @blur=${() => setTimeout(() => { this._dropOpen = false; }, 200)} />
+        ${this._dropOpen && this.query?.trim() ? this._renderDropdown(loadedKeys) : ''}
       </div>
-      ${this.loaded.size > 0 ? this._renderCourseList(loadedKeys) : ''}
+
+      ${hasLoaded || this.loadingStgru ? html`
+        <div class="chips">
+          ${[...this.loaded].map(([stgru, group]) => html`
+            <span class="chip chip-active"
+                  @click=${() => this._fire('unload-group', { stgru })}>
+              ${group.label} <span class="x">✕</span>
+            </span>
+          `)}
+          ${this.loadingStgru ? html`
+            <span class="chip chip-loading">
+              <span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>
+              Loading…
+            </span>
+          ` : ''}
+        </div>
+      ` : ''}
+
+      <div class="course-list">
+        ${hasLoaded ? this._renderCourses() : html`
+          <div class="empty-hint">
+            <strong>No study groups loaded</strong><br>
+            Search above to add one (e.g. IF4, MIB2)
+          </div>
+        `}
+      </div>
     `;
   }
 
-  _renderFac(fac, q, loadedKeys) {
-    const allGroups = fac.degrees.flatMap(d => d.programs.flatMap(p => p.groups));
-    const matches = q
-      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : allGroups;
-    if (!matches.length) return '';
-    const key = `fac::${fac.label}`;
-    const open = q || this._open.has(key);
-    const loadedN = allGroups.filter(g => loadedKeys.has(g.stgru)).length;
+  _renderDropdown(loadedKeys) {
+    const groups = this._filteredGroups;
+    if (!groups.length) {
+      return html`<div class="dropdown"><div class="drop-empty">No groups matching "${this.query}"</div></div>`;
+    }
     return html`
-      <div class="row-fac" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        ${fac.label}
-        <span class="count">${allGroups.length}${loadedN ? html` · <strong>${loadedN} aktiv</strong>` : ''}</span>
-      </div>
-      ${open ? fac.degrees.map(deg => this._renderDeg(fac, deg, q, loadedKeys)) : ''}`;
-  }
-
-  _renderDeg(fac, deg, q, loadedKeys) {
-    const allGroups = deg.programs.flatMap(p => p.groups);
-    const matches = q
-      ? allGroups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : allGroups;
-    if (!matches.length) return '';
-    const key = `deg::${fac.label}::${deg.label}`;
-    const open = q || this._open.has(key);
-    return html`
-      <div class="row-deg" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        ${deg.label}
-        <span class="count">${allGroups.length}</span>
-      </div>
-      ${open ? deg.programs.map(prog => this._renderProg(fac, deg, prog, q, loadedKeys)) : ''}`;
-  }
-
-  _renderProg(fac, deg, prog, q, loadedKeys) {
-    const groups = q
-      ? prog.groups.filter(g => g.label.toLowerCase().includes(q)
-          || (g.program_name || '').toLowerCase().includes(q)
-          || fac.label.toLowerCase().includes(q))
-      : prog.groups;
-    if (!groups.length) return '';
-    const key = `prog::${fac.label}::${prog.code}`;
-    const open = q || this._open.has(key);
-    return html`
-      <div class="row-prog" @click=${() => !q && this._toggleOpen(key)}>
-        <span class="arrow">${open ? '▾' : '▸'}</span>
-        <span class="prog-name">${prog.name || prog.code}</span>
-        <span class="count">${groups.length}</span>
-      </div>
-      ${open ? html`
-        <div class="chips-row">
-          ${groups.map(g => {
-            const active = loadedKeys.has(g.stgru);
-            const loading = this.loadingStgru === g.stgru;
-            return html`
-              <span class="chip ${active ? 'active' : ''} ${loading ? 'loading' : ''}"
-                    @click=${e => { e.stopPropagation(); this._fire(active ? 'unload-group' : 'load-group', g); }}>
-                ${loading ? html`<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>` : ''}
-                ${g.label}${active ? html` <span class="x">✕</span>` : ''}
-              </span>`;
-          })}
-        </div>` : ''}`;
-  }
-
-  _renderCourseList() {
-    return html`
-      <div class="courses-section">
-        ${[...this.loaded].map(([stgru, group]) => html`
-          <div class="grp-hdr">
-            <span>${group.label} · ${group.courses.length} Kurse</span>
-            <button class="btn-chip" @click=${() => this._fire('select-group', { stgru, on: true })}>Alle</button>
-            <button class="btn-chip" @click=${() => this._fire('select-group', { stgru, on: false })}>Keine</button>
-          </div>
-          ${group.courses.map(c => this._renderCourseItem(c))}
-        `)}
+      <div class="dropdown">
+        ${groups.map(g => {
+          const active = loadedKeys.has(g.stgru);
+          return html`
+            <div class="drop-item ${active ? 'active' : ''}"
+                 @mousedown=${(e) => { e.preventDefault(); if (!active) this._pickGroup(g); }}>
+              <div>
+                <div class="drop-label">${g.label}${active ? ' ✓' : ''}</div>
+                <div class="drop-path">${g.path}</div>
+              </div>
+            </div>`;
+        })}
       </div>`;
+  }
+
+  _renderCourses() {
+    return html`${[...this.loaded].map(([stgru, group]) => html`
+      <div class="grp-hdr">
+        <span class="grp-label">${group.label} · ${group.courses.length} courses</span>
+        <button class="grp-btn grp-btn-all" @click=${() => this._fire('select-group', { stgru, on: true })}>All</button>
+        <button class="grp-btn grp-btn-none" @click=${() => this._fire('select-group', { stgru, on: false })}>None</button>
+      </div>
+      ${group.courses.map(c => this._renderCourseItem(c))}
+    `)}`;
   }
 
   _renderCourseItem(c) {

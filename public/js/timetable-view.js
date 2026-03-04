@@ -7,26 +7,26 @@ import './course-picker.js';
 
 export class TimetableView extends LitElement {
   static properties = {
-    _courseTree:    { state: true },
-    _initError:    { state: true },
-    _loading:      { state: true },
-    _query:        { state: true },
-    _loaded:       { state: true },
-    _loadingStgru: { state: true },
-    _selected:     { state: true },
+    _courseTree:      { state: true },
+    _initError:      { state: true },
+    _loading:        { state: true },
+    _query:          { state: true },
+    _loaded:         { state: true },
+    _loadingStgru:   { state: true },
+    _selected:       { state: true },
     _detailCourseId: { state: true },
-    _error:        { state: true },
-    _downloading:  { state: true },
-    _done:         { state: true },
-    _mobileTab:    { state: true },
+    _error:          { state: true },
+    _downloading:    { state: true },
+    _done:           { state: true },
+    _mobileTab:      { state: true },
   };
 
   static styles = [shared, css`
     :host { background: var(--bg); }
 
-    /* ═══ Desktop split ═════════════════════ */
+    /* ═══ Desktop split ═══════════════════════ */
     .left-panel {
-      width: 400px; min-width: 400px;
+      width: 380px; min-width: 380px;
       display: flex; flex-direction: column;
       background: var(--surface);
       border-right: 1px solid var(--border);
@@ -37,31 +37,27 @@ export class TimetableView extends LitElement {
       display: flex; flex-direction: column;
       height: 100vh; overflow: hidden;
     }
+
     .left-hdr {
-      display: flex; flex-direction: column; gap: 8px;
-      padding: 20px 24px 12px;
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 20px 20px 14px;
     }
     .app-title {
       font-family: var(--mono); font-size: 11px; font-weight: 600;
       letter-spacing: 3px; color: var(--text);
     }
-    .app-sub { font-size: 14px; color: var(--muted); }
-    .search-wrap { padding: 0 24px 8px; }
-    .search-wrap input {
-      width: 100%; background: var(--bg);
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
-    }
-    .search-wrap input:focus { border-color: var(--primary); }
-    .search-wrap input::placeholder { color: var(--muted); opacity: 0.6; }
-    .course-scroll { flex: 1; overflow-y: auto; }
-    .course-scroll::-webkit-scrollbar { width: 4px; }
-    .course-scroll::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+    .app-sub { font-size: 13px; color: var(--muted); }
 
-    /* ── Right header ────────────────────── */
+    .picker-wrap {
+      flex: 1; overflow: hidden;
+      display: flex; flex-direction: column;
+      padding: 0 20px;
+    }
+
+    /* ── Right header ──────────────────────── */
     .right-hdr {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 8px; padding: 20px 32px;
+      gap: 8px; padding: 20px 32px; flex-shrink: 0;
       border-bottom: 1px solid var(--border);
     }
     .sched-title {
@@ -78,20 +74,20 @@ export class TimetableView extends LitElement {
     .leg-dot { width: 8px; height: 8px; border-radius: 2px; }
     .timetable-wrap { flex: 1; overflow: auto; padding: 0 32px 32px; }
 
-    /* ── Bottom bar ──────────────────────── */
+    /* ── Bottom bar ────────────────────────── */
     .bottom-bar {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 12px; padding: 16px 24px;
+      gap: 12px; padding: 14px 20px; flex-shrink: 0;
       background: var(--surface); border-top: 1px solid var(--border);
     }
-    .sel-info { display: flex; flex-direction: column; }
+    .sel-info { display: flex; flex-direction: column; gap: 1px; }
     .sel-count { font-size: 14px; font-weight: 600; }
     .sel-note {
       font-family: var(--mono); font-size: 9px; font-weight: 500;
-      letter-spacing: 0.3px; display: flex; align-items: center; gap: 4px;
+      letter-spacing: 0.3px;
     }
 
-    /* ── Detail panel ────────────────────── */
+    /* ── Detail panel ──────────────────────── */
     .detail {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       padding: 0.65rem 0.85rem; background: var(--bg); margin: 12px 0;
@@ -104,20 +100,26 @@ export class TimetableView extends LitElement {
       padding: 0.08rem 0.35rem; border-radius: 4px;
       background: var(--surface-2); color: var(--muted);
     }
-    .detail-close { margin-left: auto; cursor: pointer; font-size: 0.72rem; color: var(--muted); opacity: 0.6; }
+    .detail-close {
+      margin-left: auto; cursor: pointer; font-size: 0.72rem;
+      color: var(--muted); opacity: 0.6;
+    }
     .detail-close:hover { opacity: 1; }
     .detail-meta { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.35rem; }
     .detail-slot-hdr { font-size: 0.72rem; font-weight: 600; color: var(--muted); margin-top: 0.3rem; }
-    .detail-dates { font-size: 0.72rem; color: var(--muted); line-height: 1.7; display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem; }
+    .detail-dates {
+      font-size: 0.72rem; color: var(--muted); line-height: 1.7;
+      display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem;
+    }
 
-    /* ── Biweekly grids ──────────────────── */
+    /* ── Biweekly grids ────────────────────── */
     .grids { display: flex; flex-direction: column; gap: 0.75rem; }
     .grid-label {
       font-family: var(--mono); font-size: 11px; font-weight: 600;
       color: var(--muted); letter-spacing: 0.05em; padding: 8px 0 4px;
     }
 
-    /* ── Center states ───────────────────── */
+    /* ── Center states ─────────────────────── */
     .center {
       display: flex; flex-direction: column; align-items: center;
       justify-content: center; gap: 0.75rem; width: 100%; height: 100%;
@@ -126,32 +128,36 @@ export class TimetableView extends LitElement {
       width: 28px; height: 28px; border-width: 3px;
       border-color: rgba(255,132,0,0.2); border-top-color: var(--primary);
     }
-    .done { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+    .done {
+      text-align: center; display: flex; flex-direction: column;
+      align-items: center; gap: 0.75rem;
+    }
     .done h3 { font-size: 1.05rem; color: var(--success); }
 
-    /* ═══ Mobile ═════════════════════════════ */
+    /* ═══ Mobile ═══════════════════════════════ */
     .mobile-shell {
       display: none; flex-direction: column; width: 100%; min-height: 100vh;
       background: var(--bg);
     }
-    .mob-header { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 12px; }
+    .mob-header {
+      display: flex; flex-direction: column; gap: 12px;
+      padding: 16px 16px 12px; flex-shrink: 0;
+    }
     .mob-title-row { display: flex; align-items: center; justify-content: space-between; }
-    .mob-title { font-family: var(--mono); font-size: 18px; font-weight: 700; letter-spacing: 3px; }
+    .mob-title {
+      font-family: var(--mono); font-size: 16px; font-weight: 700;
+      letter-spacing: 3px;
+    }
     .mob-dl-icon { cursor: pointer; font-size: 18px; }
-    .mob-content { flex: 1; overflow-y: auto; padding: 8px 20px 0; }
+    .mob-content {
+      flex: 1; overflow-y: auto; padding: 0 16px;
+      display: flex; flex-direction: column;
+    }
     .mob-bottom {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 20px 32px; background: var(--surface);
-      border-top: 1px solid var(--border);
+      padding: 12px 16px 28px; background: var(--surface);
+      border-top: 1px solid var(--border); flex-shrink: 0;
     }
-    .mob-search { margin-bottom: 8px; }
-    .mob-search input {
-      width: 100%; background: var(--bg);
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      color: var(--text); font-size: 13px; padding: 8px 12px; outline: none;
-    }
-    .mob-search input:focus { border-color: var(--primary); }
-    .mob-search input::placeholder { color: var(--muted); opacity: 0.6; }
 
     @media (max-width: 768px) {
       .left-panel, .right-panel { display: none !important; }
@@ -188,7 +194,7 @@ export class TimetableView extends LitElement {
     this._loading = null;
   }
 
-  /* ═══ Data loading ═════════════════════════ */
+  /* ═══ Data loading ═══════════════════════════ */
 
   async _loadGroup(g) {
     if (this._loaded.has(g.stgru) || this._loadingStgru) return;
@@ -200,7 +206,7 @@ export class TimetableView extends LitElement {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
-      const courses = this._groupEvents(data.events || [], g);
+      const courses = groupEvents(data.events || [], g);
       const loaded = new Map(this._loaded);
       loaded.set(g.stgru, { label: g.label, courses });
       this._loaded = loaded;
@@ -216,13 +222,12 @@ export class TimetableView extends LitElement {
       const sel = new Set(this._selected);
       for (const c of group.courses) sel.delete(c.id);
       this._selected = sel;
-      if (group.courses.some(c => c.id === this._detailCourseId)) this._detailCourseId = null;
+      if (group.courses.some(c => c.id === this._detailCourseId))
+        this._detailCourseId = null;
     }
   }
 
-  _groupEvents(events, group) { return groupEvents(events, group); }
-
-  /* ═══ Selection ════════════════════════════ */
+  /* ═══ Selection ══════════════════════════════ */
 
   _toggle(id) {
     const s = new Set(this._selected);
@@ -250,9 +255,10 @@ export class TimetableView extends LitElement {
     if (t === 'unload-group')  this._unloadGroup(e.detail.stgru);
     if (t === 'toggle-course') this._toggle(e.detail.id);
     if (t === 'select-group')  this._selectGroup(e.detail.stgru, e.detail.on);
+    if (t === 'query-change')  this._query = e.detail;
   }
 
-  /* ═══ Computed ═════════════════════════════ */
+  /* ═══ Computed ═══════════════════════════════ */
 
   get _allCourses() { return [...this._loaded.values()].flatMap(g => g.courses); }
   get _selectedCourses() { return this._allCourses.filter(c => this._selected.has(c.id)); }
@@ -287,7 +293,7 @@ export class TimetableView extends LitElement {
     });
   }
 
-  /* ═══ Download ═════════════════════════════ */
+  /* ═══ Download ═══════════════════════════════ */
 
   async _download() {
     const events = this._selectedCourses.flatMap(c => c.events);
@@ -308,7 +314,21 @@ export class TimetableView extends LitElement {
     finally { this._downloading = false; }
   }
 
-  /* ═══ Render ═══════════════════════════════ */
+  /* ═══ Picker template (shared desktop + mobile) ═══ */
+
+  _pickerTemplate() {
+    return html`
+      <course-picker
+        .courseTree=${this._courseTree} .loaded=${this._loaded}
+        .selected=${this._selected} .loadingStgru=${this._loadingStgru}
+        .query=${this._query}
+        @load-group=${this._onPickerEvent} @unload-group=${this._onPickerEvent}
+        @toggle-course=${this._onPickerEvent} @select-group=${this._onPickerEvent}
+        @query-change=${this._onPickerEvent}>
+      </course-picker>`;
+  }
+
+  /* ═══ Render ═════════════════════════════════ */
 
   render() {
     if (this._loading === 'init')
@@ -328,26 +348,15 @@ export class TimetableView extends LitElement {
       <div class="left-panel">
         <div class="left-hdr">
           <span class="app-title">COURSE PLANNER</span>
-          <span class="app-sub">Select your courses below</span>
+          <span class="app-sub">Search for your study group</span>
         </div>
-        <div class="search-wrap">
-          <input type="search" placeholder="Search…"
-                 .value=${this._query} @input=${e => this._query = e.target.value} />
-        </div>
-        <div class="course-scroll">
-          <course-picker .courseTree=${this._courseTree} .loaded=${this._loaded}
-            .selected=${this._selected} .loadingStgru=${this._loadingStgru}
-            .query=${this._query}
-            @load-group=${this._onPickerEvent} @unload-group=${this._onPickerEvent}
-            @toggle-course=${this._onPickerEvent} @select-group=${this._onPickerEvent}>
-          </course-picker>
-        </div>
+        <div class="picker-wrap">${this._pickerTemplate()}</div>
         ${this._renderBottomBar()}
       </div>
       <div class="right-panel">
         <div class="right-hdr">
           <span class="sched-title">WEEKLY SCHEDULE</span>
-          <span class="sem-label">Winter Semester 2026/27</span>
+          <span class="sem-label">SoSe 2026</span>
           <div class="legend">
             <div class="leg-item"><span class="leg-dot" style="background:var(--primary)"></span> Weekly</div>
             ${biweekly ? html`<div class="leg-item"><span class="leg-dot" style="background:var(--success)"></span> Bi-weekly</div>` : ''}
@@ -379,23 +388,13 @@ export class TimetableView extends LitElement {
           </div>
         </div>
         <div class="mob-content">
-          ${this._mobileTab === 'courses' ? html`
-            <div class="mob-search">
-              <input type="search" placeholder="Search…"
-                     .value=${this._query} @input=${e => this._query = e.target.value} />
-            </div>
-            <course-picker .courseTree=${this._courseTree} .loaded=${this._loaded}
-              .selected=${this._selected} .loadingStgru=${this._loadingStgru}
-              .query=${this._query}
-              @load-group=${this._onPickerEvent} @unload-group=${this._onPickerEvent}
-              @toggle-course=${this._onPickerEvent} @select-group=${this._onPickerEvent}>
-            </course-picker>
-          ` : html`
-            <schedule-list .slots=${this._buildSlots(null)}
-              .hasBiweekly=${this._selectedCourses.some(c => c.slots.some(s => s.rhythmus === '14'))}
-              @slot-click=${this._onSlotClick}>
-            </schedule-list>
-          `}
+          ${this._mobileTab === 'courses'
+            ? this._pickerTemplate()
+            : html`
+              <schedule-list .slots=${this._buildSlots(null)}
+                .hasBiweekly=${this._selectedCourses.some(c => c.slots.some(s => s.rhythmus === '14'))}
+                @slot-click=${this._onSlotClick}>
+              </schedule-list>`}
         </div>
         <div class="mob-bottom">
           <div class="sel-info">
@@ -405,7 +404,7 @@ export class TimetableView extends LitElement {
             </span>` : ''}
           </div>
           <button class="btn-primary" ?disabled=${this._downloading || !n} @click=${this._download}>
-            ${this._downloading ? html`<span class="spinner"></span>` : '+ Download'}
+            ${this._downloading ? html`<span class="spinner"></span>` : 'Download .ics'}
           </button>
         </div>
       </div>`;

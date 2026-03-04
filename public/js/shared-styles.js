@@ -5,6 +5,7 @@ import { css } from 'https://esm.sh/lit@3';
  */
 export const shared = css`
   :host { display: block; }
+  *, *::before, *::after { box-sizing: border-box; }
 
   /* ── Typography ──────────────────────────── */
   h2 {
