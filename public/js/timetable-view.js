@@ -116,37 +116,65 @@ export class TimetableView extends LitElement {
     /* ── Center states ─────────────────────── */
     .center {
       display: flex; flex-direction: column; align-items: center;
-      justify-content: center; gap: 0.75rem; width: 100%; height: 100%;
+      justify-content: flex-start; gap: 0.75rem; width: 100%;
+      height: 100%; overflow-y: auto; padding: 24px 0;
     }
     .big-spinner {
       width: 28px; height: 28px; border-width: 3px;
       border-color: rgba(255,132,0,0.2); border-top-color: var(--primary);
     }
     .done {
-      text-align: center; display: flex; flex-direction: column;
-      align-items: center; gap: 1rem; max-width: 380px;
+      text-align: left; display: flex; flex-direction: column;
+      align-items: center; gap: 1.2rem; max-width: 420px; width: 100%;
+      padding: 0 16px;
     }
-    .done h3 { font-size: 1.05rem; color: var(--success); }
-    .done-hint { font-size: 0.85rem; color: var(--muted); line-height: 1.55; }
-    .done-actions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-    .done-btn {
-      display: flex; align-items: center; gap: 10px;
-      padding: 12px 16px; border-radius: var(--radius-sm);
-      background: var(--surface); border: 1px solid var(--border);
-      color: var(--text); font-family: var(--font); font-size: 0.88rem;
-      font-weight: 500; cursor: pointer; text-decoration: none;
-      transition: border-color 0.15s, background 0.15s;
+    .done h3 {
+      font-size: 1.1rem; color: var(--success); text-align: center;
+      width: 100%;
     }
-    .done-btn:hover { border-color: var(--border-2); background: var(--surface-2); }
-    .done-btn .icon { font-size: 1.3rem; flex-shrink: 0; }
-    .done-btn .label { text-align: left; }
-    .done-btn .sub {
-      display: block; font-size: 0.75rem; color: var(--muted);
-      font-family: var(--mono); letter-spacing: 0.2px; margin-top: 2px;
+    .done-redownload {
+      font-size: 0.8rem; color: var(--primary); background: none;
+      border: none; cursor: pointer; font-family: var(--mono);
+      text-decoration: underline; text-underline-offset: 2px;
     }
-    .done-btn .sub a {
+    .done-section {
+      width: 100%; background: var(--surface);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .done-section-title {
+      font-size: 0.85rem; font-weight: 700; display: flex;
+      align-items: center; gap: 8px;
+    }
+    .done-section-title .icon { font-size: 1.2rem; }
+    .done-app {
+      display: flex; flex-direction: column; gap: 4px;
+      padding-left: 4px;
+    }
+    .done-app-name {
+      font-size: 0.82rem; font-weight: 600; display: flex;
+      align-items: center; gap: 6px;
+    }
+    .done-app-name .badge {
+      font-size: 0.65rem; font-weight: 500; color: var(--muted);
+      font-family: var(--mono); background: var(--bg);
+      padding: 1px 6px; border-radius: 4px;
+    }
+    .done-steps {
+      font-size: 0.78rem; color: var(--muted); line-height: 1.65;
+      padding-left: 2px;
+    }
+    .done-steps ol {
+      margin: 0; padding-left: 18px;
+    }
+    .done-steps li { margin-bottom: 2px; }
+    .done-steps strong { color: var(--text); font-weight: 600; }
+    .done-steps a {
       color: var(--primary); text-decoration: underline;
       text-underline-offset: 2px;
+    }
+    .done-divider {
+      height: 1px; background: var(--border); margin: 4px 0;
     }
 
     /* ═══ Mobile ═══════════════════════════════ */
@@ -347,22 +375,59 @@ export class TimetableView extends LitElement {
     if (this._done)
       return html`<div class="center"><div class="done">
         <h3>✓ stundenplan.ics heruntergeladen</h3>
-        <p class="done-hint">Jetzt in deinen Kalender importieren:</p>
-        <div class="done-actions">
-          <button class="done-btn" @click=${() => this._redownload()}>
-            <span class="icon">📅</span>
-            <span class="label">Google Kalender<span class="sub">Die App kann keine .ics importieren!<br><a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Import-Seite im Browser öffnen</a> → Datei auswählen</span></span>
-          </button>
-          <button class="done-btn" @click=${() => this._redownload()}>
-            <span class="icon">🍎</span>
-            <span class="label">Apple Kalender<span class="sub">Datei muss über Safari heruntergeladen werden!</span></span>
-          </button>
-          <button class="done-btn" @click=${() => this._redownload()}>
-            <span class="icon">📧</span>
-            <span class="label">Outlook<span class="sub">Am PC: .ics Datei öffnen oder per Drag & Drop<br>Handy: <a href="https://outlook.live.com/calendar/0/addcalendar" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Outlook Web öffnen</a> → Aus Datei importieren</span></span>
-          </button>
+        <button class="done-redownload" @click=${() => this._redownload()}>📥 Nochmal herunterladen</button>
+
+        <!-- PHONE -->
+        <div class="done-section">
+          <div class="done-section-title"><span class="icon">📱</span> Am Handy</div>
+
+          <div class="done-app">
+            <div class="done-app-name">🍎 iPhone / Apple Kalender</div>
+            <div class="done-steps"><ol>
+              <li>Diese Seite in <strong>Safari</strong> öffnen (nicht Chrome!)</li>
+              <li>Stundenplan nochmal herunterladen</li>
+              <li>Im Popup auf <strong>„Hinzufügen"</strong> tippen — fertig ✓</li>
+            </ol></div>
+          </div>
+
+          <div class="done-divider"></div>
+
+          <div class="done-app">
+            <div class="done-app-name">📅 Android / Google Kalender</div>
+            <div class="done-steps"><ol>
+              <li>Die Google Kalender <strong>App kann keine .ics importieren</strong></li>
+              <li>Öffne <a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener">calendar.google.com/Import</a> im <strong>Browser</strong></li>
+              <li>Klick auf <strong>„Datei von meinem Computer auswählen"</strong></li>
+              <li>Die heruntergeladene <strong>stundenplan.ics</strong> auswählen → Importieren ✓</li>
+            </ol></div>
+          </div>
         </div>
-        <button class="btn-ghost" style="margin-top:8px" @click=${() => { this._done = false; }}>← Zurück zur Auswahl</button>
+
+        <!-- COMPUTER -->
+        <div class="done-section">
+          <div class="done-section-title"><span class="icon">💻</span> Am Computer</div>
+
+          <div class="done-app">
+            <div class="done-app-name">🍎 Apple Kalender <span class="badge">Mac</span></div>
+            <div class="done-steps"><ol>
+              <li>Doppelklick auf die <strong>stundenplan.ics</strong> Datei</li>
+              <li>Kalender auswählen → <strong>OK</strong> — fertig ✓</li>
+            </ol></div>
+          </div>
+
+          <div class="done-divider"></div>
+
+          <div class="done-app">
+            <div class="done-app-name">📅 Google Kalender <span class="badge">Web</span></div>
+            <div class="done-steps"><ol>
+              <li>Öffne <a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener">calendar.google.com/Import</a></li>
+              <li>Klick auf <strong>„Datei von meinem Computer auswählen"</strong></li>
+              <li>Die heruntergeladene <strong>stundenplan.ics</strong> auswählen → Importieren ✓</li>
+            </ol></div>
+          </div>
+        </div>
+
+        <button class="btn-ghost" @click=${() => { this._done = false; }}>← Zurück zur Auswahl</button>
       </div></div>`;
 
     return html`${this._renderDesktop()}${this._renderMobile()}`;
