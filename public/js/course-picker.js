@@ -166,15 +166,44 @@ export class CoursePicker extends LitElement {
     );
   }
 
-  /** Groups matching the current query. */
+  /**
+   * Fuzzy-match: subsequence search with scoring.
+   * Returns { score, indices } or null. Consecutive matches and
+   * start-of-word hits score higher.
+   */
+  _fuzzy(query, text) {
+    const q = query.toLowerCase(), t = text.toLowerCase();
+    let qi = 0, score = 0, indices = [], prev = -2;
+    for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+      if (t[ti] === q[qi]) {
+        indices.push(ti);
+        // consecutive bonus
+        score += (ti === prev + 1) ? 8 : 1;
+        // start-of-word bonus
+        if (ti === 0 || ' ›·-_('.includes(t[ti - 1])) score += 5;
+        prev = ti; qi++;
+      }
+    }
+    return qi === q.length ? { score, indices } : null;
+  }
+
+  /** Groups matching the current query (fuzzy). */
   get _filteredGroups() {
-    const q = (this.query || '').toLowerCase().trim();
+    const q = (this.query || '').trim();
     if (!q) return [];
-    return this._allGroups.filter(g =>
-      g.label.toLowerCase().includes(q)
-      || (g.program_name || '').toLowerCase().includes(q)
-      || g.path.toLowerCase().includes(q)
-    ).slice(0, 20);
+    return this._allGroups
+      .map(g => {
+        const targets = [g.label, g.program_name || '', g.path];
+        let best = null;
+        for (const t of targets) {
+          const m = this._fuzzy(q, t);
+          if (m && (!best || m.score > best.score)) best = m;
+        }
+        return best ? { ...g, _score: best.score } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 20);
   }
 
   _onInput(e) {
