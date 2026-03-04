@@ -144,6 +144,10 @@ export class TimetableView extends LitElement {
       display: block; font-size: 0.75rem; color: var(--muted);
       font-family: var(--mono); letter-spacing: 0.2px; margin-top: 2px;
     }
+    .done-btn .sub a {
+      color: var(--primary); text-decoration: underline;
+      text-underline-offset: 2px;
+    }
 
     /* ═══ Mobile ═══════════════════════════════ */
     .mobile-shell {
@@ -347,7 +351,7 @@ export class TimetableView extends LitElement {
         <div class="done-actions">
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📅</span>
-            <span class="label">Google Kalender<span class="sub">Handy: .ics öffnen → Google Kalender wählen<br>PC: calendar.google.com → Einstellungen → Importieren</span></span>
+            <span class="label">Google Kalender<span class="sub">Handy: .ics öffnen → Google Kalender wählen<br>PC: <a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Import-Seite öffnen</a> → Datei auswählen</span></span>
           </button>
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">🍎</span>
