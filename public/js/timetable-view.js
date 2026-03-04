@@ -351,11 +351,11 @@ export class TimetableView extends LitElement {
         <div class="done-actions">
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📅</span>
-            <span class="label">Google Kalender<span class="sub">Handy: .ics öffnen → Google Kalender wählen<br>PC: <a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Import-Seite öffnen</a> → Datei auswählen</span></span>
+            <span class="label">Google Kalender<span class="sub">Die App kann keine .ics importieren!<br><a href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Import-Seite im Browser öffnen</a> → Datei auswählen</span></span>
           </button>
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">🍎</span>
-            <span class="label">Apple Kalender<span class="sub">Einfach die .ics Datei öffnen</span></span>
+            <span class="label">Apple Kalender<span class="sub">Datei muss über Safari heruntergeladen werden!</span></span>
           </button>
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📧</span>
