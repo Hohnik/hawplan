@@ -6,7 +6,8 @@ const START = 8, END = 20, HOURS = END - START, QROWS = HOURS * 4;
 /**
  * <week-grid .slots=${[...]}></week-grid>
  * Each slot: { day: 1–6, start, end, label, tag?, color, room,
- *              lecturer?, eventCount?, rhythmus?, weeks?: Set<number> }
+ *              lecturer?, eventCount?, rhythmus?, weeks?: Set, courseId? }
+ * Fires 'slot-click' with { courseId } when an event is clicked.
  */
 export class WeekGrid extends LitElement {
   static properties = { slots: { type: Array } };
@@ -61,24 +62,22 @@ export class WeekGrid extends LitElement {
       overflow: hidden;
       font-size: 0.68rem;
       line-height: 1.3;
-      cursor: default;
+      cursor: pointer;
       box-sizing: border-box;
     }
+    .ev:hover { filter: brightness(1.3); }
     .ev.conflict {
       outline: 1.5px dashed rgba(248,113,113,0.7);
       outline-offset: -1.5px;
     }
     .ev-label {
       font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     }
-    .ev-room {
-      opacity: 0.7; font-size: 0.58rem;
+    .ev-sub {
+      opacity: 0.75; font-size: 0.58rem;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .conflict-badge {
-      position: absolute; top: 1px; right: 3px;
-      font-size: 0.55rem; line-height: 1; opacity: 0.8;
     }
 
     .empty-msg {
@@ -144,7 +143,16 @@ export class WeekGrid extends LitElement {
       const wks = [...s.weeks].sort((a, b) => a - b);
       lines.push(`KW ${wks.join(', ')}`);
     }
+    lines.push('', 'Klick → Einzeltermine');
     return lines.join('\n');
+  }
+
+  _onClick(s) {
+    if (s.courseId) {
+      this.dispatchEvent(new CustomEvent('slot-click', {
+        detail: { courseId: s.courseId }, bubbles: true, composed: true,
+      }));
+    }
   }
 
   render() {
@@ -188,10 +196,12 @@ export class WeekGrid extends LitElement {
               <div class="ev ${s.conflict ? 'conflict' : ''}"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
                           background:${s.color}18;border-left:3px solid ${s.color};color:${s.color}"
-                   title=${this._tooltip(s)}>
-                ${s.conflict ? html`<span class="conflict-badge">⚠</span>` : ''}
+                   title=${this._tooltip(s)}
+                   @click=${() => this._onClick(s)}>
                 <span class="ev-label">${s.label}</span>
-                ${h > 38 && s.room ? html`<span class="ev-room">${s.room}</span>` : ''}
+                ${h > 30 ? html`<span class="ev-sub">${s.start}–${s.end}</span>` : ''}
+                ${h > 45 && s.lecturer ? html`<span class="ev-sub">${s.lecturer}</span>` : ''}
+                ${h > 60 && s.room ? html`<span class="ev-sub">📍 ${s.room}</span>` : ''}
               </div>`;
           })}
         </div>`)}

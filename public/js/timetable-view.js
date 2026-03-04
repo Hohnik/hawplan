@@ -43,7 +43,7 @@ export class TimetableView extends LitElement {
     _loaded:       { state: true },   // Map<stgru, { label, courses[] }>
     _loadingStgru: { state: true },
     _selected:     { state: true },   // Set<courseId>
-    _expanded:     { state: true },   // Set<courseId> — expanded course cards
+    _detailCourseId: { state: true }, // courseId shown in detail panel
     _error:        { state: true },
     _downloading:  { state: true },
     _done:         { state: true },
@@ -164,16 +164,33 @@ export class TimetableView extends LitElement {
       white-space: nowrap; flex-shrink: 0; padding-top: 3px;
     }
 
-    /* ── Expanded event list ──────────── */
-    .ev-list {
-      width: 100%; margin-top: 0.35rem;
-      padding-top: 0.35rem; border-top: 1px solid var(--border);
+    /* ── Detail panel (below grid) ───── */
+    .detail {
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 0.65rem 0.85rem; background: var(--bg);
     }
-    .ev-slot-hdr {
+    .detail-hdr {
+      display: flex; align-items: center; gap: 0.45rem;
+      margin-bottom: 0.4rem;
+    }
+    .detail-hdr .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .detail-name { font-weight: 600; font-size: 0.88rem; }
+    .detail-tag {
+      font-size: 0.65rem; font-weight: 600;
+      padding: 0.08rem 0.35rem; border-radius: 4px;
+      background: var(--surface-2); color: var(--muted);
+    }
+    .detail-close {
+      margin-left: auto; cursor: pointer;
+      font-size: 0.72rem; color: var(--muted); opacity: 0.6;
+    }
+    .detail-close:hover { opacity: 1; }
+    .detail-meta { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.35rem; }
+    .detail-slot-hdr {
       font-size: 0.72rem; font-weight: 600; color: var(--muted);
       margin-top: 0.3rem; margin-bottom: 0.15rem;
     }
-    .ev-dates {
+    .detail-dates {
       font-size: 0.72rem; color: var(--muted); line-height: 1.7;
       display: flex; flex-wrap: wrap; gap: 0.15rem 0.4rem;
     }
@@ -205,7 +222,7 @@ export class TimetableView extends LitElement {
     this._loaded = new Map();
     this._loadingStgru = null;
     this._selected = new Set();
-    this._expanded = new Set();
+    this._detailCourseId = null;
     this._error = '';
     this._downloading = false;
     this._done = false;
@@ -264,10 +281,10 @@ export class TimetableView extends LitElement {
     this._loaded = loaded;
     if (group) {
       const sel = new Set(this._selected);
-      const exp = new Set(this._expanded);
-      for (const c of group.courses) { sel.delete(c.id); exp.delete(c.id); }
+      for (const c of group.courses) sel.delete(c.id);
       this._selected = sel;
-      this._expanded = exp;
+      if (group.courses.some(c => c.id === this._detailCourseId))
+        this._detailCourseId = null;
     }
   }
 
@@ -318,13 +335,12 @@ export class TimetableView extends LitElement {
     const s = new Set(this._selected);
     s.has(id) ? s.delete(id) : s.add(id);
     this._selected = s;
+    if (!s.has(id) && this._detailCourseId === id) this._detailCourseId = null;
   }
 
-  _toggleExpand(id, e) {
-    e.stopPropagation();
-    const s = new Set(this._expanded);
-    s.has(id) ? s.delete(id) : s.add(id);
-    this._expanded = s;
+  _onSlotClick(e) {
+    const id = e.detail?.courseId;
+    this._detailCourseId = this._detailCourseId === id ? null : id;
   }
 
   _selectGroup(stgru, on) {
@@ -357,7 +373,7 @@ export class TimetableView extends LitElement {
           label: c.fullName || c.summary,
           tag: c.fullName && c.summary !== c.fullName ? c.summary : '',
           room: s.room, color, lecturer: c.lecturer,
-          eventCount: c.events.length,
+          eventCount: c.events.length, courseId: c.id,
           rhythmus: s.rhythmus, weeks: s.weeks,
         }));
     });
@@ -430,7 +446,8 @@ export class TimetableView extends LitElement {
       ${this._loaded.size > 0 ? this._renderCourses() : ''}
       ${allSlots.length > 0 ? (biweekly
         ? this._renderBiweeklyGrids()
-        : html`<week-grid .slots=${allSlots}></week-grid>`) : ''}
+        : html`<week-grid .slots=${allSlots} @slot-click=${this._onSlotClick}></week-grid>`) : ''}
+      ${this._detailCourseId ? this._renderDetail() : ''}
       ${this._error ? html`<p class="error-msg">❌ ${this._error}</p>` : ''}
       ${this._loaded.size > 0 ? this._renderFooter() : ''}
     </div>`;
@@ -440,11 +457,11 @@ export class TimetableView extends LitElement {
     return html`<div class="grids">
       <div>
         <div class="grid-label">📅 Ungerade KW</div>
-        <week-grid .slots=${this._buildSlots('odd')}></week-grid>
+        <week-grid .slots=${this._buildSlots('odd')} @slot-click=${this._onSlotClick}></week-grid>
       </div>
       <div>
         <div class="grid-label">📅 Gerade KW</div>
-        <week-grid .slots=${this._buildSlots('even')}></week-grid>
+        <week-grid .slots=${this._buildSlots('even')} @slot-click=${this._onSlotClick}></week-grid>
       </div>
     </div>`;
   }
@@ -557,16 +574,12 @@ export class TimetableView extends LitElement {
 
   _renderCourse(c) {
     const on = this._selected.has(c.id);
-    const exp = this._expanded.has(c.id);
     const color = colorOf(c.id);
     const name = c.fullName || c.summary;
     const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
     const hasBi = c.slots.some(s => s.rhythmus === '14');
-    const slots = c.slots.map(s => {
-      let t = `${DAY[s.day]} ${s.start}–${s.end}`;
-      if (s.rhythmus === '14') t += ' ⟳';
-      return t;
-    }).join(', ');
+    const slots = c.slots.map(s =>
+      `${DAY[s.day]} ${s.start}–${s.end}`).join(', ');
 
     return html`
       <div class="course ${on ? 'on' : ''}" @click=${() => this._toggle(c.id)}>
@@ -579,18 +592,19 @@ export class TimetableView extends LitElement {
           </div>
           <div class="c-meta">
             ${slots}${c.lecturer ? ` · ${c.lecturer}` : ''}
-            <span style="cursor:pointer;margin-left:0.3rem;opacity:0.6"
-                  @click=${e => this._toggleExpand(c.id, e)}
-                  title="Einzeltermine ${exp ? 'ausblenden' : 'anzeigen'}">
-              ${exp ? '▴' : '▾'} ${c.events.length}×
-            </span>
           </div>
-          ${exp ? this._renderEventList(c) : ''}
         </div>
+        <span class="c-count">${c.events.length}×</span>
       </div>`;
   }
 
-  _renderEventList(c) {
+  _renderDetail() {
+    const c = this._allCourses.find(c => c.id === this._detailCourseId);
+    if (!c) return '';
+    const color = colorOf(c.id);
+    const name = c.fullName || c.summary;
+    const tag = c.fullName && c.summary !== c.fullName ? c.summary : '';
+
     // Group events by slot (day+time)
     const bySlot = new Map();
     for (const ev of c.events) {
@@ -604,13 +618,22 @@ export class TimetableView extends LitElement {
         bySlot.get(sk).push(ev);
       } catch {}
     }
+
     return html`
-      <div class="ev-list">
+      <div class="detail">
+        <div class="detail-hdr">
+          <span class="dot" style="background:${color}"></span>
+          <span class="detail-name">${name}</span>
+          ${tag ? html`<span class="detail-tag">${tag}</span>` : ''}
+          <span class="detail-close" @click=${() => { this._detailCourseId = null; }}>✕</span>
+        </div>
+        ${c.lecturer ? html`<div class="detail-meta">👤 ${c.lecturer}</div>` : ''}
         ${[...bySlot].map(([sk, evs]) => html`
-          <div class="ev-slot-hdr">
+          <div class="detail-slot-hdr">
             ${sk}${evs[0]?.location ? ` · 📍 ${evs[0].location}` : ''}
+            · ${evs.length} Termine
           </div>
-          <div class="ev-dates">
+          <div class="detail-dates">
             ${evs.sort((a, b) => a.dtstart.localeCompare(b.dtstart))
                  .map(ev => html`<span>${fmtDate(ev.dtstart)}</span>`)}
           </div>
