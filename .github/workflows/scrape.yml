@@ -1,0 +1,67 @@
+name: Scrape & Deploy
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'   # Every Monday 05:00 UTC
+  workflow_dispatch:        # Manual trigger
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Scrape Primuss timetables
+        env:
+          USERNAME: ${{ secrets.PRIMUSS_USERNAME }}
+          PASSWORD: ${{ secrets.PRIMUSS_PASSWORD }}
+          TOTP_SECRET: ${{ secrets.PRIMUSS_TOTP_SECRET }}
+        run: uv run scripts/scrape.py
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/data/
+          if git diff --cached --quiet; then
+            echo "No data changes"
+          else
+            git commit -m "chore: update timetable data [$(date -u +%Y-%m-%d)]"
+            git push
+          fi
+
+  deploy:
+    needs: scrape
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main  # get the freshly pushed commit
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

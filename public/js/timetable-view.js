@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 import { shared } from './shared-styles.js';
 import { colorOf, DAY_NAMES, fmtDate, groupEvents, countConflicts } from './helpers.js';
+import { downloadICS } from './ics.js';
 import './week-grid.js';
 import './schedule-list.js';
 import './course-picker.js';
@@ -180,10 +181,9 @@ export class TimetableView extends LitElement {
   async _init() {
     this._loading = 'init'; this._initError = '';
     try {
-      const res = await fetch('/api/init');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
-      this._courseTree = data.course_tree || [];
+      const res = await fetch('data/tree.json');
+      if (!res.ok) throw new Error(`Failed to load course tree (${res.status})`);
+      this._courseTree = await res.json();
     } catch (e) { this._initError = e.message; }
     this._loading = null;
   }
@@ -194,13 +194,10 @@ export class TimetableView extends LitElement {
     if (this._loaded.has(g.stgru) || this._loadingStgru) return;
     this._loadingStgru = g.stgru; this._error = '';
     try {
-      const res = await fetch('/api/timetable', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stgru: g.stgru }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
-      const courses = groupEvents(data.events || [], g);
+      const res = await fetch(`data/groups/${g.stgru}.json`);
+      if (!res.ok) throw new Error(`No data for ${g.label} (${res.status})`);
+      const events = await res.json();
+      const courses = groupEvents(events, g);
       const loaded = new Map(this._loaded);
       loaded.set(g.stgru, { label: g.label, courses });
       this._loaded = loaded;
@@ -294,15 +291,7 @@ export class TimetableView extends LitElement {
     if (!events.length) { this._error = 'Keine Kurse ausgewählt.'; return; }
     this._downloading = true; this._error = '';
     try {
-      const res = await fetch('/api/ics', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
-      const a = Object.assign(document.createElement('a'), {
-        href: URL.createObjectURL(await res.blob()), download: 'stundenplan.ics',
-      });
-      a.click(); URL.revokeObjectURL(a.href);
+      downloadICS(events);
       this._done = true;
     } catch (e) { this._error = e.message; }
     finally { this._downloading = false; }
@@ -326,7 +315,7 @@ export class TimetableView extends LitElement {
 
   render() {
     if (this._loading === 'init')
-      return html`<div class="center"><span class="spinner big-spinner"></span><p class="hint">Verbinde mit Primuss…</p></div>`;
+      return html`<div class="center"><span class="spinner big-spinner"></span><p class="hint">Lade Studiengänge…</p></div>`;
     if (this._initError)
       return html`<div class="center"><p class="error-msg">${this._initError}</p><button class="btn-primary" @click=${this._init}>Erneut versuchen</button></div>`;
     if (this._done)
