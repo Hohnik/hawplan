@@ -39,12 +39,13 @@ export function buildICS(events) {
 
   for (const ev of events) {
     const uid = `${icsTs(ev.dtstart)}-${escText(ev.summary).slice(0, 40)}@stundenplan-gen`;
+    const name = ev.fach_name || ev.summary;
     lines.push('BEGIN:VEVENT');
     lines.push(fold(`UID:${uid}`));
     lines.push(`DTSTAMP:${icsNow()}`);
     lines.push(`DTSTART:${icsTs(ev.dtstart)}`);
     lines.push(`DTEND:${icsTs(ev.dtend || ev.dtstart)}`);
-    lines.push(fold(`SUMMARY:${escText(ev.summary)}`));
+    lines.push(fold(`SUMMARY:${escText(name)}`));
     if (ev.location) lines.push(fold(`LOCATION:${escText(ev.location)}`));
     if (ev.description) lines.push(fold(`DESCRIPTION:${escText(ev.description)}`));
     lines.push('END:VEVENT');
