@@ -345,18 +345,18 @@ export class TimetableView extends LitElement {
         <h3>✓ stundenplan.ics heruntergeladen</h3>
         <p class="done-hint">Jetzt in deinen Kalender importieren:</p>
         <div class="done-actions">
-          <a class="done-btn" href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener">
+          <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📅</span>
-            <span class="label">Google Kalender<span class="sub">Importieren → Datei auswählen → Importieren</span></span>
-          </a>
-          <a class="done-btn" href="#" @click=${(e) => { e.preventDefault(); this._redownload(); }}>
+            <span class="label">Google Kalender<span class="sub">Handy: .ics öffnen → Google Kalender wählen<br>PC: calendar.google.com → Einstellungen → Importieren</span></span>
+          </button>
+          <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">🍎</span>
             <span class="label">Apple Kalender<span class="sub">Einfach die .ics Datei öffnen</span></span>
-          </a>
-          <a class="done-btn" href="#" @click=${(e) => { e.preventDefault(); this._redownload(); }}>
+          </button>
+          <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📧</span>
             <span class="label">Outlook<span class="sub">Einfach die .ics Datei öffnen</span></span>
-          </a>
+          </button>
         </div>
         <button class="btn-ghost" style="margin-top:8px" @click=${() => { this._done = false; }}>← Zurück zur Auswahl</button>
       </div></div>`;
