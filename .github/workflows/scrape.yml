@@ -1,4 +1,4 @@
-name: Scrape & Deploy
+name: Scrape Timetables
 
 on:
   schedule:
@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   scrape:
@@ -45,23 +43,3 @@ jobs:
             git commit -m "chore: update timetable data [$(date -u +%Y-%m-%d)]"
             git push
           fi
-
-  deploy:
-    needs: scrape
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main  # get the freshly pushed commit
-
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - id: deployment
-        uses: actions/deploy-pages@v4

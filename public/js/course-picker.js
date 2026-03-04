@@ -227,7 +227,7 @@ export class CoursePicker extends LitElement {
 
     return html`
       <div class="search-area">
-        <input type="search" placeholder="Search study group (e.g. IF4, MIB2)…"
+        <input type="search" placeholder="Studiengruppe suchen (z.B. IF4, MIB2)…"
                .value=${this.query}
                @input=${this._onInput}
                @focus=${this._onFocus}
@@ -246,7 +246,7 @@ export class CoursePicker extends LitElement {
           ${this.loadingStgru ? html`
             <span class="chip chip-loading">
               <span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>
-              Loading…
+              Laden…
             </span>
           ` : ''}
         </div>
@@ -255,8 +255,8 @@ export class CoursePicker extends LitElement {
       <div class="course-list">
         ${hasLoaded ? this._renderCourses() : html`
           <div class="empty-hint">
-            <strong>No study groups loaded</strong><br>
-            Search above to add one (e.g. IF4, MIB2)
+            <strong>Keine Studiengruppen geladen</strong><br>
+            Oben suchen, um eine hinzuzufügen (z.B. IF4, MIB2)
           </div>
         `}
       </div>
@@ -266,7 +266,7 @@ export class CoursePicker extends LitElement {
   _renderDropdown(loadedKeys) {
     const groups = this._filteredGroups;
     if (!groups.length) {
-      return html`<div class="dropdown"><div class="drop-empty">No groups matching "${this.query}"</div></div>`;
+      return html`<div class="dropdown"><div class="drop-empty">Keine Gruppen für „${this.query}"</div></div>`;
     }
     return html`
       <div class="dropdown">
@@ -287,9 +287,9 @@ export class CoursePicker extends LitElement {
   _renderCourses() {
     return html`${[...this.loaded].map(([stgru, group]) => html`
       <div class="grp-hdr">
-        <span class="grp-label">${group.label} · ${group.courses.length} courses</span>
-        <button class="grp-btn grp-btn-all" @click=${() => this._fire('select-group', { stgru, on: true })}>All</button>
-        <button class="grp-btn grp-btn-none" @click=${() => this._fire('select-group', { stgru, on: false })}>None</button>
+        <span class="grp-label">${group.label} · ${group.courses.length} Kurse</span>
+        <button class="grp-btn grp-btn-all" @click=${() => this._fire('select-group', { stgru, on: true })}>Alle</button>
+        <button class="grp-btn grp-btn-none" @click=${() => this._fire('select-group', { stgru, on: false })}>Keine</button>
       </div>
       ${group.courses.map(c => this._renderCourseItem(c))}
     `)}`;
@@ -308,7 +308,7 @@ export class CoursePicker extends LitElement {
         <input type="checkbox" .checked=${on} />
         <div class="ci-info">
           <span class="ci-name">${name}</span>
-          <span class="ci-meta">${meta}${hasBi ? ' · Bi-weekly' : ''}</span>
+          <span class="ci-meta">${meta}${hasBi ? ' · 14-tägig' : ''}</span>
         </div>
       </div>`;
   }

@@ -199,7 +199,7 @@ export class TimetableView extends LitElement {
     this._loading = 'init'; this._initError = '';
     try {
       const res = await fetch('data/tree.json');
-      if (!res.ok) throw new Error(`Failed to load course tree (${res.status})`);
+      if (!res.ok) throw new Error(`Kursliste konnte nicht geladen werden (${res.status})`);
       this._courseTree = await res.json();
     } catch (e) { this._initError = e.message; }
     this._loading = null;
@@ -212,7 +212,7 @@ export class TimetableView extends LitElement {
     this._loadingStgru = g.stgru; this._error = '';
     try {
       const res = await fetch(`data/groups/${g.stgru}.json`);
-      if (!res.ok) throw new Error(`No data for ${g.label} (${res.status})`);
+      if (!res.ok) throw new Error(`Keine Daten für ${g.label} (${res.status})`);
       const events = await res.json();
       const courses = groupEvents(events, g);
       const loaded = new Map(this._loaded);
@@ -347,7 +347,7 @@ export class TimetableView extends LitElement {
         <div class="done-actions">
           <a class="done-btn" href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener">
             <span class="icon">📅</span>
-            <span class="label">Google Calendar<span class="sub">Importieren → Datei auswählen → Importieren</span></span>
+            <span class="label">Google Kalender<span class="sub">Importieren → Datei auswählen → Importieren</span></span>
           </a>
           <a class="done-btn" href="#" @click=${(e) => { e.preventDefault(); this._redownload(); }}>
             <span class="icon">🍎</span>
@@ -370,15 +370,15 @@ export class TimetableView extends LitElement {
     return html`
       <div class="left-panel">
         <div class="left-hdr">
-          <span class="app-title">COURSE PLANNER</span>
-          <span class="app-sub">Search for your study group</span>
+          <span class="app-title">STUNDENPLAN</span>
+          <span class="app-sub">Suche deine Studiengruppe</span>
         </div>
         <div class="picker-wrap">${this._pickerTemplate()}</div>
         ${this._renderBottomBar()}
       </div>
       <div class="right-panel">
         <div class="right-hdr">
-          <span class="sched-title">WEEKLY SCHEDULE</span>
+          <span class="sched-title">WOCHENPLAN</span>
           <span class="sem-label">SoSe 2026</span>
         </div>
         <div class="timetable-wrap">
@@ -396,14 +396,14 @@ export class TimetableView extends LitElement {
       <div class="mobile-shell">
         <div class="mob-header">
           <div class="mob-title-row">
-            <span class="mob-title">COURSE PLANNER</span>
+            <span class="mob-title">STUNDENPLAN</span>
             <span class="mob-dl-icon" @click=${this._download} title="Download .ics">⬇</span>
           </div>
           <div class="tabs">
             <button class="tab ${this._mobileTab === 'courses' ? 'active' : ''}"
-                    @click=${() => this._mobileTab = 'courses'}>Courses</button>
+                    @click=${() => this._mobileTab = 'courses'}>Kurse</button>
             <button class="tab ${this._mobileTab === 'schedule' ? 'active' : ''}"
-                    @click=${() => this._mobileTab = 'schedule'}>Schedule</button>
+                    @click=${() => this._mobileTab = 'schedule'}>Wochenplan</button>
           </div>
         </div>
         <div class="mob-content">
@@ -416,9 +416,9 @@ export class TimetableView extends LitElement {
         </div>
         <div class="mob-bottom">
           <div class="sel-info">
-            <span class="sel-count">${n} course${n !== 1 ? 's' : ''} selected</span>
+            <span class="sel-count">${n} Kurs${n !== 1 ? 'e' : ''} ausgewählt</span>
             ${n > 0 ? html`<span class="sel-note" style="color:${this._conflictCount ? 'var(--error)' : 'var(--success)'}">
-              ${this._conflictCount ? `⚠ ${this._conflictCount} conflict${this._conflictCount > 1 ? 's' : ''}` : '✓ No time conflicts'}
+              ${this._conflictCount ? `⚠ ${this._conflictCount} Zeitkonflikt${this._conflictCount > 1 ? 'e' : ''}` : '✓ Keine Zeitkonflikte'}
             </span>` : ''}
           </div>
           <button class="btn-primary" ?disabled=${this._downloading || !n} @click=${this._download}>
@@ -434,13 +434,13 @@ export class TimetableView extends LitElement {
     return html`
       <div class="bottom-bar">
         <div class="sel-info">
-          <span class="sel-count">${n} course${n !== 1 ? 's' : ''} selected</span>
+          <span class="sel-count">${n} Kurs${n !== 1 ? 'e' : ''} ausgewählt</span>
           ${n > 0 ? html`<span class="sel-note" style="color:${conflicts ? 'var(--error)' : 'var(--success)'}">
-            ${conflicts ? `⚠ ${conflicts} time conflict${conflicts > 1 ? 's' : ''}` : '✓ No time conflicts'}
+            ${conflicts ? `⚠ ${conflicts} Zeitkonflikt${conflicts > 1 ? 'e' : ''}` : '✓ Keine Zeitkonflikte'}
           </span>` : ''}
         </div>
         <button class="btn-primary" ?disabled=${this._downloading || !n} @click=${this._download}>
-          ${this._downloading ? html`<span class="spinner"></span> Generating…` : 'Download .ics'}
+          ${this._downloading ? html`<span class="spinner"></span> Erstelle…` : 'Download .ics'}
         </button>
       </div>`;
   }

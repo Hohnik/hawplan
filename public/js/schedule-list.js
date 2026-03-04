@@ -113,7 +113,7 @@ export class ScheduleList extends LitElement {
         <span class="day-label" style="color:${has ? 'var(--text)' : 'var(--muted)'}">${label}</span>
         ${has
           ? slots.map(s => this._renderCard(s))
-          : html`<span class="day-empty">No courses</span>`}
+          : html`<span class="day-empty">Keine Kurse</span>`}
       </div>`;
   }
 
@@ -131,7 +131,7 @@ export class ScheduleList extends LitElement {
         <div class="info">
           <span class="name" style="color:${fg}">${s.label}</span>
           <span class="meta" style="color:${fg}">
-            ${s.room ? `Room ${s.room}` : ''}${isBi ? ' · Bi-weekly' : ''}
+            ${s.room ? `Raum ${s.room}` : ''}${isBi ? ' · 14-tägig' : ''}
           </span>
         </div>
       </div>`;
