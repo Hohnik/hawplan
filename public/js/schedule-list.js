@@ -11,24 +11,13 @@ const DAY_LONG = ['SONNTAG','MONTAG','DIENSTAG','MITTWOCH','DONNERSTAG','FREITAG
 export class ScheduleList extends LitElement {
   static properties = {
     slots: { type: Array },
-    hasBiweekly: { type: Boolean },
   };
 
   static styles = css`
     :host { display: block; }
+    *, *::before, *::after { box-sizing: border-box; }
 
     .sched-list { display: flex; flex-direction: column; }
-
-    .legend {
-      display: flex; align-items: center; gap: 12px;
-      padding: 4px 0 12px;
-    }
-    .leg-item {
-      display: flex; align-items: center; gap: 5px;
-      font-family: var(--mono, monospace); font-size: 10px; font-weight: 500;
-      color: var(--muted, #B8B9B6); letter-spacing: 0.3px;
-    }
-    .leg-dot { width: 8px; height: 8px; border-radius: 2px; }
 
     .day-section {
       display: flex; flex-direction: column; gap: 8px;
@@ -49,7 +38,7 @@ export class ScheduleList extends LitElement {
     .card {
       display: flex; align-items: center; gap: 12px;
       border-radius: 8px; padding: 12px 14px;
-      width: 100%; cursor: pointer; transition: filter 0.1s;
+      width: 100%; min-width: 0; cursor: pointer; transition: filter 0.1s;
     }
     .card:hover { filter: brightness(1.1); }
 
@@ -64,18 +53,21 @@ export class ScheduleList extends LitElement {
       width: 2px; height: 32px; border-radius: 1px; opacity: 0.3;
     }
 
-    .info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-    .name { font-family: var(--font, sans-serif); font-size: 13px; font-weight: 600; }
+    .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .name {
+      font-family: var(--font, sans-serif); font-size: 13px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     .meta {
       font-family: var(--mono, monospace); font-size: 10px; font-weight: 500;
       letter-spacing: 0.3px; opacity: 0.6;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
   `;
 
   constructor() {
     super();
     this.slots = [];
-    this.hasBiweekly = false;
   }
 
   _buildDaySchedule() {
@@ -110,15 +102,6 @@ export class ScheduleList extends LitElement {
     const schedule = this._buildDaySchedule();
     return html`
       <div class="sched-list">
-        <div class="legend">
-          <div class="leg-item">
-            <span class="leg-dot" style="background:var(--primary)"></span> Weekly
-          </div>
-          ${this.hasBiweekly ? html`
-            <div class="leg-item">
-              <span class="leg-dot" style="background:var(--success, #00AA55)"></span> Bi-weekly
-            </div>` : ''}
-        </div>
         ${schedule.map(d => this._renderDay(d))}
       </div>`;
   }

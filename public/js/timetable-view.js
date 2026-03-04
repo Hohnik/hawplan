@@ -65,13 +65,6 @@ export class TimetableView extends LitElement {
       letter-spacing: 3px;
     }
     .sem-label { font-size: 13px; color: var(--muted); }
-    .legend { display: flex; align-items: center; gap: 16px; }
-    .leg-item {
-      display: flex; align-items: center; gap: 5px;
-      font-family: var(--mono); font-size: 10px; font-weight: 500;
-      color: var(--muted); letter-spacing: 0.3px;
-    }
-    .leg-dot { width: 8px; height: 8px; border-radius: 2px; }
     .timetable-wrap { flex: 1; overflow: auto; padding: 0 32px 32px; }
 
     /* ── Bottom bar ────────────────────────── */
@@ -137,6 +130,7 @@ export class TimetableView extends LitElement {
     /* ═══ Mobile ═══════════════════════════════ */
     .mobile-shell {
       display: none; flex-direction: column; width: 100%; min-height: 100vh;
+      max-width: 100vw; overflow-x: hidden;
       background: var(--bg);
     }
     .mob-header {
@@ -150,8 +144,8 @@ export class TimetableView extends LitElement {
     }
     .mob-dl-icon { cursor: pointer; font-size: 18px; }
     .mob-content {
-      flex: 1; overflow-y: auto; padding: 0 16px;
-      display: flex; flex-direction: column;
+      flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 16px;
+      display: flex; flex-direction: column; min-width: 0;
     }
     .mob-bottom {
       display: flex; align-items: center; justify-content: space-between;
@@ -357,10 +351,6 @@ export class TimetableView extends LitElement {
         <div class="right-hdr">
           <span class="sched-title">WEEKLY SCHEDULE</span>
           <span class="sem-label">SoSe 2026</span>
-          <div class="legend">
-            <div class="leg-item"><span class="leg-dot" style="background:var(--primary)"></span> Weekly</div>
-            ${biweekly ? html`<div class="leg-item"><span class="leg-dot" style="background:var(--success)"></span> Bi-weekly</div>` : ''}
-          </div>
         </div>
         <div class="timetable-wrap">
           ${allSlots.length > 0 ? (biweekly ? this._renderBiweeklyGrids() :
@@ -392,7 +382,6 @@ export class TimetableView extends LitElement {
             ? this._pickerTemplate()
             : html`
               <schedule-list .slots=${this._buildSlots(null)}
-                .hasBiweekly=${this._selectedCourses.some(c => c.slots.some(s => s.rhythmus === '14'))}
                 @slot-click=${this._onSlotClick}>
               </schedule-list>`}
         </div>
