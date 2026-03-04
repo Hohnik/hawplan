@@ -166,3 +166,35 @@
 - `main.py`: FastAPI app with `/api/fetch-all` (week iterator + event normaliser) and `/api/generate-ics` (iCalendar generator with stable UIDs to prevent duplicate imports).
 - Frontend split into 4 Lit components: `<app-shell>` (step router + owns all API calls), `<step-credentials>` (form), `<step-events>` (filterable event list), `<step-done>` (success).
 - Shared CSS design tokens in `global.css` (pierce shadow DOM via custom properties); reusable Lit `css` block in `shared-styles.js`.
+
+## 2026-03-04 — UX redesign + static site deployment
+
+**UX redesign — search-first group picker:**
+- Replaced 3-level faculty accordion (Faculty → Degree → Program → chips) with a search-first dropdown. Type "IF4" → dropdown shows matching groups with breadcrumb path → click to load.
+- Active groups shown as orange chips with ✕ (always visible at top).
+- Course list is now the main scrollable content, not buried below a tree.
+- Empty state: "No study groups loaded — Search above to add one".
+- Fuzzy search: subsequence matching with scoring — consecutive chars get 8× bonus, start-of-word hits +5. Results sorted by score.
+
+**Mobile overflow fix:**
+- `box-sizing: border-box` from global.css doesn't pierce shadow DOM. Added to `shared-styles.js`.
+- Added `overflow-x: hidden`, `max-width: 100vw` on mobile shell.
+- Added `min-width: 0` on flex children, text truncation with ellipsis on schedule-list cards.
+
+**Removed Weekly/Bi-weekly legend:** Colored dots in right header and mobile schedule-list weren't tied to actual event colors.
+
+**Static site conversion (no backend needed):**
+- New `scripts/scrape.py` — authenticates via Shibboleth SSO, fetches all 160 study groups' timetables in ~6 min (5 concurrent groups, 6 HTTP semaphore). Saves `public/data/tree.json` (29KB) + `public/data/groups/<stgru>.json` (160 files, 6MB total).
+- New `public/js/ics.js` — client-side ICS generation (replaces `/api/ics` endpoint). Proper line folding, text escaping, `VCALENDAR` + `VEVENT` structure.
+- `timetable-view.js` now fetches `data/tree.json` and `data/groups/{stgru}.json` instead of API endpoints.
+- Download generates .ics entirely in the browser via `Blob` + `URL.createObjectURL`.
+
+**GitHub Pages deployment:**
+- Repo: `github.com/Hohnik/uni_timetable_creator`
+- `.github/workflows/scrape.yml` — weekly cron (Mon 05:00 UTC): checkout → uv sync → scrape → commit data → deploy `public/` to GitHub Pages.
+- 3 repository secrets set via `gh secret set`: `PRIMUSS_USERNAME`, `PRIMUSS_PASSWORD`, `PRIMUSS_TOTP_SECRET`.
+- GitHub Pages enabled with `build_type: workflow`.
+- First deploy triggered via `gh workflow run`.
+- Live URL: `https://hohnik.github.io/uni_timetable_creator/`
+
+**File changes:** course-picker.js rewritten (289 lines), timetable-view.js simplified (461→453 lines), ics.js new (65 lines), scrape.py new (107 lines). Total frontend: 1340 lines.

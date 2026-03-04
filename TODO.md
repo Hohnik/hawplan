@@ -21,9 +21,16 @@
 - [x] Clickable grid events → detail panel with individual dates
 - [x] Pencil design alignment — solid fill events, English day headers, JetBrains Mono + Geist
 - [x] Component extraction — course-picker, schedule-list, week-grid, helpers
-- [x] Desktop split panel layout (400px left + flex right)
+- [x] Desktop split panel layout (380px left + flex right)
 - [x] Mobile responsive — Courses/Schedule tab switcher
-- [x] Conflict detection — dynamic "✓ No time conflicts" / "⚠ N conflicts" in bottom bar
+- [x] Conflict detection — "✓ No time conflicts" / "⚠ N conflicts" in bottom bar
+- [x] UX redesign — search-first group picker, dropdown, active chips, flat course list
+- [x] Fuzzy search for study groups
+- [x] Fix mobile horizontal scroll (box-sizing in shadow DOM)
+- [x] Remove unused Weekly/Bi-weekly legend
+- [x] Static site conversion — pre-fetched JSON data, client-side ICS
+- [x] GitHub Pages deployment + weekly auto-scrape via Actions
+- [x] Repository secrets configured (PRIMUSS_USERNAME, PASSWORD, TOTP_SECRET)
 
 ## Next
 - [ ] Test ICS import in Google Calendar / Apple Calendar
