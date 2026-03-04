@@ -26,13 +26,19 @@ export function fmtDate(s) {
   return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.`;
 }
 
-/** Count time conflicts among a set of slots. */
+/** Count real time conflicts — only when slots share at least one week. */
 export function countConflicts(slots) {
   let n = 0;
   for (let i = 0; i < slots.length; i++) {
     for (let j = i + 1; j < slots.length; j++) {
       const a = slots[i], b = slots[j];
-      if (a.day === b.day && a.start < b.end && b.start < a.end) n++;
+      if (a.day !== b.day || a.start >= b.end || b.start >= a.end) continue;
+      if (a.weeks?.size && b.weeks?.size) {
+        let shared = false;
+        for (const w of a.weeks) { if (b.weeks.has(w)) { shared = true; break; } }
+        if (!shared) continue;
+      }
+      n++;
     }
   }
   return n;
