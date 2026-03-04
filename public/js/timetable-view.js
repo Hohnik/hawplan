@@ -359,7 +359,7 @@ export class TimetableView extends LitElement {
           </button>
           <button class="done-btn" @click=${() => this._redownload()}>
             <span class="icon">📧</span>
-            <span class="label">Outlook<span class="sub">Einfach die .ics Datei öffnen</span></span>
+            <span class="label">Outlook<span class="sub">Am PC: .ics Datei öffnen oder per Drag & Drop<br>Handy: <a href="https://outlook.live.com/calendar/0/addcalendar" target="_blank" rel="noopener" @click=${(e) => e.stopPropagation()}>Outlook Web öffnen</a> → Aus Datei importieren</span></span>
           </button>
         </div>
         <button class="btn-ghost" style="margin-top:8px" @click=${() => { this._done = false; }}>← Zurück zur Auswahl</button>
