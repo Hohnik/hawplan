@@ -124,9 +124,26 @@ export class TimetableView extends LitElement {
     }
     .done {
       text-align: center; display: flex; flex-direction: column;
-      align-items: center; gap: 0.75rem;
+      align-items: center; gap: 1rem; max-width: 380px;
     }
     .done h3 { font-size: 1.05rem; color: var(--success); }
+    .done-hint { font-size: 0.85rem; color: var(--muted); line-height: 1.55; }
+    .done-actions { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+    .done-btn {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px; border-radius: var(--radius-sm);
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font); font-size: 0.88rem;
+      font-weight: 500; cursor: pointer; text-decoration: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .done-btn:hover { border-color: var(--border-2); background: var(--surface-2); }
+    .done-btn .icon { font-size: 1.3rem; flex-shrink: 0; }
+    .done-btn .label { text-align: left; }
+    .done-btn .sub {
+      display: block; font-size: 0.75rem; color: var(--muted);
+      font-family: var(--mono); letter-spacing: 0.2px; margin-top: 2px;
+    }
 
     /* ═══ Mobile ═══════════════════════════════ */
     .mobile-shell {
@@ -297,6 +314,11 @@ export class TimetableView extends LitElement {
     finally { this._downloading = false; }
   }
 
+  _redownload() {
+    const events = this._selectedCourses.flatMap(c => c.events);
+    if (events.length) downloadICS(events);
+  }
+
   /* ═══ Picker template (shared desktop + mobile) ═══ */
 
   _pickerTemplate() {
@@ -319,7 +341,25 @@ export class TimetableView extends LitElement {
     if (this._initError)
       return html`<div class="center"><p class="error-msg">${this._initError}</p><button class="btn-primary" @click=${this._init}>Erneut versuchen</button></div>`;
     if (this._done)
-      return html`<div class="center"><div class="done"><h3>stundenplan.ics heruntergeladen</h3><p class="hint">Öffne die Datei in Google Calendar, Apple Kalender oder Outlook.</p><button class="btn-primary" @click=${() => { this._done = false; }}>Zurück</button></div></div>`;
+      return html`<div class="center"><div class="done">
+        <h3>✓ stundenplan.ics heruntergeladen</h3>
+        <p class="done-hint">Jetzt in deinen Kalender importieren:</p>
+        <div class="done-actions">
+          <a class="done-btn" href="https://calendar.google.com/calendar/u/0/r/settings/export" target="_blank" rel="noopener">
+            <span class="icon">📅</span>
+            <span class="label">Google Calendar<span class="sub">Importieren → Datei auswählen → Importieren</span></span>
+          </a>
+          <a class="done-btn" href="#" @click=${(e) => { e.preventDefault(); this._redownload(); }}>
+            <span class="icon">🍎</span>
+            <span class="label">Apple Kalender<span class="sub">Einfach die .ics Datei öffnen</span></span>
+          </a>
+          <a class="done-btn" href="#" @click=${(e) => { e.preventDefault(); this._redownload(); }}>
+            <span class="icon">📧</span>
+            <span class="label">Outlook<span class="sub">Einfach die .ics Datei öffnen</span></span>
+          </a>
+        </div>
+        <button class="btn-ghost" style="margin-top:8px" @click=${() => { this._done = false; }}>← Zurück zur Auswahl</button>
+      </div></div>`;
 
     return html`${this._renderDesktop()}${this._renderMobile()}`;
   }
