@@ -341,9 +341,20 @@ export class TimetableView extends LitElement {
     this._downloading = true; this._error = '';
     try {
       downloadICS(events);
+      this._trackDownload();
       this._done = true;
     } catch (e) { this._error = e.message; }
     finally { this._downloading = false; }
+  }
+
+  _trackDownload() {
+    if (typeof umami === 'undefined') return;
+    const groups = [...this._loaded.values()].map(g => g.label);
+    umami.track('download', {
+      groups: groups.join(', '),
+      courses: this._selectedCourses.length,
+      events: this._totalEvents,
+    });
   }
 
   _redownload() {
