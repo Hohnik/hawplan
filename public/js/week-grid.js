@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 
-const ALL_DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const ALL_DAYS = ['MO', 'DI', 'MI', 'DO', 'FR', 'SA'];
 const START = 8, END = 20, HOURS = END - START, QROWS = HOURS * 4;
 
 /**
@@ -208,21 +208,21 @@ export class WeekGrid extends LitElement {
       ${days.map((d, i) => html`<div class="day-hdr" style="grid-column:${i + 2}">${d}</div>`)}
 
       ${hours.map(h => {
-        const row = (h - START) * 4 + 2;
-        return html`
+      const row = (h - START) * 4 + 2;
+      return html`
           <div class="time" style="grid-row:${row}">${String(h).padStart(2, '0')}:00</div>
           <div class="hline" style="grid-row:${row}"></div>`;
-      })}
+    })}
 
       ${!slots.length ? html`<div class="empty-msg">Kurse auswählen…</div>` : ''}
 
       ${dayNums.map(day => html`
         <div class="day-col" style="grid-column:${day + 1}">
           ${(laid.get(day) || []).map(s => {
-            const top = (s.startMin / (HOURS * 60)) * totalH;
-            const h = ((s.endMin - s.startMin) / (HOURS * 60)) * totalH;
-            const fg = this._contrastFg(s.color);
-            return html`
+      const top = (s.startMin / (HOURS * 60)) * totalH;
+      const h = ((s.endMin - s.startMin) / (HOURS * 60)) * totalH;
+      const fg = this._contrastFg(s.color);
+      return html`
               <div class="ev ${s.conflict ? 'conflict' : ''}"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
                           background:${s.color};color:${fg}"
@@ -232,7 +232,7 @@ export class WeekGrid extends LitElement {
                 ${h > 30 ? html`<span class="ev-sub">${s.start} – ${s.end}</span>` : ''}
                 ${h > 45 && s.room ? html`<span class="ev-sub">${s.room}</span>` : ''}
               </div>`;
-          })}
+    })}
         </div>`)}
     </div>`;
   }

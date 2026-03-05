@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'https://esm.sh/lit@3';
 import { shared } from './shared-styles.js';
 
-const DAY_NAMES = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+const DAY_NAMES = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
 /**
  * <course-picker .courseTree .loaded .selected .loadingStgru .query></course-picker>
@@ -13,12 +13,12 @@ const DAY_NAMES = ['So','Mo','Di','Mi','Do','Fr','Sa'];
  */
 export class CoursePicker extends LitElement {
   static properties = {
-    courseTree:    { type: Array },
-    loaded:       { type: Object },
-    selected:     { type: Object },
+    courseTree: { type: Array },
+    loaded: { type: Object },
+    selected: { type: Object },
     loadingStgru: { type: String },
-    query:        { type: String },
-    _dropOpen:    { state: true },
+    query: { type: String },
+    _dropOpen: { state: true },
   };
 
   static styles = [shared, css`
@@ -244,7 +244,7 @@ export class CoursePicker extends LitElement {
 
     return html`
       <div class="search-area">
-        <input type="search" placeholder="Studiengruppe suchen (z.B. IF4, MIB2)…"
+        <input type="search" placeholder="Studiengang suchen"
                .value=${this.query}
                @input=${this._onInput}
                @focus=${this._onFocus}
@@ -272,8 +272,8 @@ export class CoursePicker extends LitElement {
       <div class="course-list">
         ${hasLoaded ? this._renderCourses() : html`
           <div class="empty-hint">
-            <strong>Keine Studiengruppen geladen</strong><br>
-            Oben suchen, um eine hinzuzufügen (z.B. IF4, MIB2)
+            <strong>Kein Studiengang geladen</strong><br>
+            wähle im Suchfeld deinen Studiengang (z.B. Künstliche Intelligenz,...)
           </div>
         `}
       </div>
@@ -288,8 +288,8 @@ export class CoursePicker extends LitElement {
     return html`
       <div class="dropdown">
         ${groups.map(g => {
-          const active = loadedKeys.has(g.stgru);
-          return html`
+      const active = loadedKeys.has(g.stgru);
+      return html`
             <div class="drop-item ${active ? 'active' : ''}"
                  @mousedown=${(e) => { e.preventDefault(); if (!active) this._pickGroup(g); }}>
               <div>
@@ -297,7 +297,7 @@ export class CoursePicker extends LitElement {
                 <div class="drop-path">${g.path}</div>
               </div>
             </div>`;
-        })}
+    })}
       </div>`;
   }
 

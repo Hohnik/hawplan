@@ -8,18 +8,18 @@ import './course-picker.js';
 
 export class TimetableView extends LitElement {
   static properties = {
-    _courseTree:      { state: true },
-    _initError:      { state: true },
-    _loading:        { state: true },
-    _query:          { state: true },
-    _loaded:         { state: true },
-    _loadingStgru:   { state: true },
-    _selected:       { state: true },
+    _courseTree: { state: true },
+    _initError: { state: true },
+    _loading: { state: true },
+    _query: { state: true },
+    _loaded: { state: true },
+    _loadingStgru: { state: true },
+    _selected: { state: true },
     _detailCourseId: { state: true },
-    _error:          { state: true },
-    _downloading:    { state: true },
-    _done:           { state: true },
-    _mobileTab:      { state: true },
+    _error: { state: true },
+    _downloading: { state: true },
+    _done: { state: true },
+    _mobileTab: { state: true },
   };
 
   static styles = [shared, css`
@@ -291,11 +291,11 @@ export class TimetableView extends LitElement {
 
   _onPickerEvent(e) {
     const t = e.type;
-    if (t === 'load-group')    this._loadGroup(e.detail);
-    if (t === 'unload-group')  this._unloadGroup(e.detail.stgru);
+    if (t === 'load-group') this._loadGroup(e.detail);
+    if (t === 'unload-group') this._unloadGroup(e.detail.stgru);
     if (t === 'toggle-course') this._toggle(e.detail.id);
-    if (t === 'select-group')  this._selectGroup(e.detail.stgru, e.detail.on);
-    if (t === 'query-change')  this._query = e.detail;
+    if (t === 'select-group') this._selectGroup(e.detail.stgru, e.detail.on);
+    if (t === 'query-change') this._query = e.detail;
   }
 
   /* ═══ Computed ═══════════════════════════════ */
@@ -440,7 +440,6 @@ export class TimetableView extends LitElement {
       <div class="left-panel">
         <div class="left-hdr">
           <span class="app-title">STUNDENPLAN</span>
-          <span class="app-sub">Suche deine Studiengruppe</span>
         </div>
         <div class="picker-wrap">${this._pickerTemplate()}</div>
         ${this._renderBottomBar()}
@@ -452,7 +451,7 @@ export class TimetableView extends LitElement {
         </div>
         <div class="timetable-wrap">
           ${allSlots.length > 0 ? (biweekly ? this._renderBiweeklyGrids() :
-            html`<week-grid .slots=${allSlots} @slot-click=${this._onSlotClick}></week-grid>`) : ''}
+        html`<week-grid .slots=${allSlots} @slot-click=${this._onSlotClick}></week-grid>`) : ''}
           ${this._detailCourseId ? this._renderDetail() : ''}
         </div>
         ${this._error ? html`<p class="error-msg" style="margin:0 32px 16px">${this._error}</p>` : ''}
@@ -477,8 +476,8 @@ export class TimetableView extends LitElement {
         </div>
         <div class="mob-content">
           ${this._mobileTab === 'courses'
-            ? this._pickerTemplate()
-            : html`
+        ? this._pickerTemplate()
+        : html`
               <schedule-list .slots=${this._buildSlots(null)}
                 @slot-click=${this._onSlotClick}>
               </schedule-list>`}
@@ -536,7 +535,7 @@ export class TimetableView extends LitElement {
         const sk = `${DAY_NAMES[d.getDay()]} ${ev.dtstart.slice(11, 16)}–${(ev.dtend || ev.dtstart).slice(11, 16)}`;
         if (!bySlot.has(sk)) bySlot.set(sk, []);
         bySlot.get(sk).push(ev);
-      } catch {}
+      } catch { }
     }
     return html`
       <div class="detail">
