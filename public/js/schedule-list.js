@@ -41,6 +41,8 @@ export class ScheduleList extends LitElement {
       width: 100%; min-width: 0; cursor: pointer; transition: filter 0.1s;
     }
     .card:hover { filter: brightness(1.1); }
+    .card.excluded { opacity: 0.25; text-decoration: line-through; filter: grayscale(0.8); }
+    .card.excluded:hover { opacity: 0.45; filter: grayscale(0.5); }
 
     .time {
       display: flex; flex-direction: column; align-items: center; gap: 1px;
@@ -93,7 +95,7 @@ export class ScheduleList extends LitElement {
   _onCardClick(s) {
     if (s.courseId) {
       this.dispatchEvent(new CustomEvent('slot-click', {
-        detail: { courseId: s.courseId }, bubbles: true, composed: true,
+        detail: { courseId: s.courseId, slotKey: s.slotKey }, bubbles: true, composed: true,
       }));
     }
   }
@@ -121,7 +123,7 @@ export class ScheduleList extends LitElement {
     const fg = this._cardFg(s.color);
     const isBi = s.rhythmus === '14';
     return html`
-      <div class="card" style="background:${s.color}"
+      <div class="card ${s.excluded ? 'excluded' : ''}" style="background:${s.color}"
            @click=${() => this._onCardClick(s)}>
         <div class="time" style="color:${fg}">
           <span class="time-start">${s.start}</span>

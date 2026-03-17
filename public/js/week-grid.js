@@ -69,6 +69,12 @@ export class WeekGrid extends LitElement {
       box-sizing: border-box;
     }
     .ev:hover { filter: brightness(1.3); }
+    .ev.excluded {
+      opacity: 0.25;
+      text-decoration: line-through;
+      filter: grayscale(0.8);
+    }
+    .ev.excluded:hover { opacity: 0.45; filter: grayscale(0.5); }
     .ev.conflict {
       outline: 1.5px dashed rgba(255,92,51,0.7);
       outline-offset: -1.5px;
@@ -179,7 +185,7 @@ export class WeekGrid extends LitElement {
   _onClick(s) {
     if (s.courseId) {
       this.dispatchEvent(new CustomEvent('slot-click', {
-        detail: { courseId: s.courseId }, bubbles: true, composed: true,
+        detail: { courseId: s.courseId, slotKey: s.slotKey }, bubbles: true, composed: true,
       }));
     }
   }
@@ -223,10 +229,10 @@ export class WeekGrid extends LitElement {
       const h = ((s.endMin - s.startMin) / (HOURS * 60)) * totalH;
       const fg = this._contrastFg(s.color);
       return html`
-              <div class="ev ${s.conflict ? 'conflict' : ''}"
+              <div class="ev ${s.conflict ? 'conflict' : ''} ${s.excluded ? 'excluded' : ''}"
                    style="top:${top}px;height:${h}px;left:${s.left * 100}%;width:calc(${s.width * 100}% - 2px);
                           background:${s.color};color:${fg}"
-                   title=${this._tooltip(s)}
+                   title=${s.excluded ? 'Klick → wieder hinzufügen' : this._tooltip(s)}
                    @click=${() => this._onClick(s)}>
                 <span class="ev-label">${s.label}</span>
                 ${h > 30 ? html`<span class="ev-sub">${s.start} – ${s.end}</span>` : ''}

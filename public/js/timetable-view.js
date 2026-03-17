@@ -15,6 +15,7 @@ export class TimetableView extends LitElement {
     _loaded: { state: true },
     _loadingStgru: { state: true },
     _selected: { state: true },
+    _excludedSlots: { state: true },
     _detailCourseId: { state: true },
     _error: { state: true },
     _downloading: { state: true },
@@ -218,6 +219,7 @@ export class TimetableView extends LitElement {
     this._loaded = new Map();
     this._loadingStgru = null;
     this._selected = new Set();
+    this._excludedSlots = new Set();
     this._detailCourseId = null;
     this._error = '';
     this._downloading = false;
@@ -260,8 +262,13 @@ export class TimetableView extends LitElement {
     loaded.delete(stgru); this._loaded = loaded;
     if (group) {
       const sel = new Set(this._selected);
-      for (const c of group.courses) sel.delete(c.id);
+      const ex = new Set(this._excludedSlots);
+      for (const c of group.courses) {
+        sel.delete(c.id);
+        for (const s of c.slots) ex.delete(`${c.id}::${s.key}`);
+      }
       this._selected = sel;
+      this._excludedSlots = ex;
       if (group.courses.some(c => c.id === this._detailCourseId))
         this._detailCourseId = null;
     }
@@ -277,8 +284,12 @@ export class TimetableView extends LitElement {
   }
 
   _onSlotClick(e) {
-    const id = e.detail?.courseId;
-    this._detailCourseId = this._detailCourseId === id ? null : id;
+    const { courseId, slotKey } = e.detail || {};
+    if (!courseId || !slotKey) return;
+    const key = `${courseId}::${slotKey}`;
+    const ex = new Set(this._excludedSlots);
+    if (ex.has(key)) ex.delete(key); else ex.add(key);
+    this._excludedSlots = ex;
   }
 
   _selectGroup(stgru, on) {
@@ -303,7 +314,7 @@ export class TimetableView extends LitElement {
   get _allCourses() { return [...this._loaded.values()].flatMap(g => g.courses); }
   get _selectedCourses() { return this._allCourses.filter(c => this._selected.has(c.id)); }
   get _totalEvents() { return this._selectedCourses.reduce((n, c) => n + c.events.length, 0); }
-  get _conflictCount() { return countConflicts(this._buildSlots(null)); }
+  get _conflictCount() { return countConflicts(this._buildSlots(null).filter(s => !s.excluded)); }
 
   _buildSlots(parity) {
     return this._selectedCourses.flatMap(c => {
@@ -320,7 +331,8 @@ export class TimetableView extends LitElement {
           tag: c.fullName && c.summary !== c.fullName ? c.summary : '',
           room: s.room, color, lecturer: c.lecturer,
           eventCount: c.events.length, courseId: c.id,
-          rhythmus: s.rhythmus, weeks: s.weeks,
+          slotKey: s.key, rhythmus: s.rhythmus, weeks: s.weeks,
+          excluded: this._excludedSlots.has(`${c.id}::${s.key}`),
         }));
     });
   }
@@ -336,7 +348,7 @@ export class TimetableView extends LitElement {
   /* ═══ Download ═══════════════════════════════ */
 
   async _download() {
-    const events = this._selectedCourses.flatMap(c => c.events);
+    const events = this._filteredEvents;
     if (!events.length) { this._error = 'Keine Kurse ausgewählt.'; return; }
     this._downloading = true; this._error = '';
     try {
@@ -357,8 +369,21 @@ export class TimetableView extends LitElement {
     });
   }
 
+  /** Events filtered by both course selection and excluded slots. */
+  get _filteredEvents() {
+    return this._selectedCourses.flatMap(c =>
+      c.events.filter(ev => {
+        try {
+          const d = new Date(ev.dtstart);
+          const sk = `${d.getDay()}-${ev.dtstart.slice(11, 16)}-${(ev.dtend || ev.dtstart).slice(11, 16)}`;
+          return !this._excludedSlots.has(`${c.id}::${sk}`);
+        } catch { return true; }
+      })
+    );
+  }
+
   _redownload() {
-    const events = this._selectedCourses.flatMap(c => c.events);
+    const events = this._filteredEvents;
     if (events.length) downloadICS(events);
   }
 
